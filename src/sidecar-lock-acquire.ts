@@ -15,6 +15,7 @@ import {
   maxTransientLockDenials,
   validateSidecarLockStaleMs,
   validateSidecarLockRetryOptions,
+  validateSidecarLockCompromiseCheckIntervalMs,
   validateSidecarLockTimeoutMs,
 } from "./sidecar-lock-policy.js";
 import {
@@ -90,6 +91,7 @@ export async function acquireSidecarLock<TPayload extends Record<string, unknown
   validateSidecarLockRetryOptions(retry);
   validateSidecarLockTimeoutMs(options.timeoutMs);
   validateSidecarLockStaleMs(options.staleMs);
+  validateSidecarLockCompromiseCheckIntervalMs(options.compromiseCheckIntervalMs);
   context.ensureExitCleanupRegistered();
   const normalizedTargetPath = await resolveNormalizedTargetPath(options.targetPath, options.lockRoot);
   const lockPath = options.lockPath ?? `${normalizedTargetPath}.lock`;
@@ -252,7 +254,10 @@ export async function acquireSidecarLock<TPayload extends Record<string, unknown
         const returnedHandle = context.handleForHeldLock(normalizedTargetPath, createdHeld);
         const interval = options.compromiseCheckIntervalMs;
         if (options.onCompromised && interval !== undefined && interval > 0) {
+          let compromiseCheckInFlight = false;
           createdHeld.compromiseTimer = setInterval(() => {
+            if (compromiseCheckInFlight) return;
+            compromiseCheckInFlight = true;
             void returnedHandle
               .verifyStillHeld()
               .catch(() => false)
@@ -262,6 +267,9 @@ export async function acquireSidecarLock<TPayload extends Record<string, unknown
                   createdHeld.compromiseTimer = undefined;
                   options.onCompromised?.({ lockPath, normalizedTargetPath });
                 }
+              })
+              .finally(() => {
+                compromiseCheckInFlight = false;
               });
           }, interval);
           createdHeld.compromiseTimer.unref();
