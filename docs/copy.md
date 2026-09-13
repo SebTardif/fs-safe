@@ -77,6 +77,8 @@ An already aborted signal prevents dispatch. In-flight cancellation stops cancel
 
 Completion is not a crash-durability guarantee. The API is suitable for reconstructible templates and checkouts; it does not sync every file or replace application-level publication and recovery rules.
 
+Byte copying retains fractional file and directory access/modification timestamps to the precision supported by Node's timestamp APIs and the destination filesystem. This includes dates before 1970 on Unix. On Windows, [Node's unsigned stat seconds](https://github.com/nodejs/node/blob/v26.8.2/src/node_file-inl.h#L93-L104) can report pre-1970 timestamps as dates about 136 years later; byte copying inherits that upstream limitation.
+
 ## Platform tests and benchmarks
 
 After building the host native binding, run `pnpm test test/clone.test.ts test/copy-tree.test.ts`. APFS tests can use the normal macOS temporary directory. For Btrfs, ReFS, or XFS, set `FS_SAFE_CLONE_TEST_ROOT` to an existing writable directory on that filesystem. The test creates and cleans only its own temporary children. An explicitly configured unsupported directory fails the test rather than silently skipping platform proof. XFS metadata tests require the `attr` and `acl` utilities.
