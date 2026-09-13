@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Inspect complete inherited local Windows ACLs through the existing native descriptor reader, avoiding PowerShell startup while preserving the public SID classifier, explicit injections, .NET normalization, and structured fallback diagnostics.
+
 - Add `copyFileHandle` for bounded transfers between caller-owned regular-file handles, preserving both cursors and source observation before target writes while sharing Root's portable copy machinery.
 - Apply benchmark iteration reductions consistently to synchronous operations, verify hash digests, initialize private Windows fixture ACLs, and cover sorted/early-stop directory iteration and explicit mixed-tree copy policies.
 - Add `sha256FileSync()` for bounded SHA-256 hashing of pathnames and borrowed file descriptors without changing their current positions, with exact pathname admission checks and no native binding requirement.
