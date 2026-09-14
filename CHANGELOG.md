@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Preserve files refreshed while expiry pruning prepares removal by rechecking current file type and modification time immediately before guarded deletion, without requiring read access.
 - Speed up JavaScript gzip container-padding validation with bounded buffer comparisons and one lazy reusable zero window, preserving complete suffix checks, short-read handling, and cancellation cadence.
 - Destroy and join JavaScript ZIP decoder sources before rejecting bounded member reads, preventing abandoned decoders and retained archive buffers after byte-limit failures.
 - Fix automatic Linux file copies truncating when `copy_file_range` reports zero after partial progress; confirm EOF at the current offset before completing or resuming the guarded byte-copy fallback.
