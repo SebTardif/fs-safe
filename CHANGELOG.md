@@ -53,6 +53,8 @@
 - Add `overwriteFileHandle()` for in-place replacement through a borrowed regular-file handle, with prefix-only rollback preparation, growth-before-overwrite ordering, unchanged descriptor ownership and cursor, and a synchronous once-only pre-write admission callback.
 - Add opt-in `producerIsolation: "private-directory"` to callback sibling writes and external sibling outputs, owning private workspace cleanup before the producer runs so partial failures can be cleaned while preserving file admission, publication checks, and existing defaults.
 
+- Add synchronous path-local ASCII case probing with read-only mode, exact identity observations, owned temporary-file cleanup, and an explicit unknown result instead of operating-system guesses.
+
 ## 0.10.0 - 2026-09-13
 
 ### Highlights
