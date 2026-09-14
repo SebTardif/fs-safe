@@ -22,6 +22,27 @@ export type SyncDirectoryGuard = {
   stat: Stats;
 };
 
+export type DirectoryIdentity = Readonly<{
+  dev: bigint;
+  ino: bigint;
+  realPath: string;
+}>;
+
+export async function readDirectoryIdentity(dir: string): Promise<DirectoryIdentity> {
+  const guard = await createAsyncDirectoryGuard(dir, { bigint: true });
+  return Object.freeze({ dev: guard.stat.dev, ino: guard.stat.ino, realPath: guard.realPath });
+}
+
+export function assertDirectoryIdentitySync(
+  observedPath: string,
+  expected: Pick<DirectoryIdentity, "dev" | "ino"> & { realPath?: string },
+): void {
+  inspectDirectoryIdentitySync(observedPath, expected);
+  if (expected.realPath !== undefined && realpathSync.native(observedPath) !== expected.realPath) {
+    throw new FsSafeError("path-mismatch", "directory changed during operation");
+  }
+}
+
 export function createAsyncDirectoryGuard(dir: string, options: { bigint: true }): Promise<AsyncDirectoryGuard<BigIntStats>>;
 export function createAsyncDirectoryGuard(dir: string, options?: { bigint?: false }): Promise<AsyncDirectoryGuard>;
 export function createAsyncDirectoryGuard(dir: string, options: { bigint: boolean }): Promise<AnyAsyncDirectoryGuard>;
@@ -34,9 +55,11 @@ export async function createAsyncDirectoryGuard(dir: string, options?: { bigint?
 }
 
 export async function assertAsyncDirectoryGuard(guard: AnyAsyncDirectoryGuard): Promise<void> {
-  const stat = typeof guard.stat.dev === "bigint" && typeof guard.stat.ino === "bigint"
-    ? inspectDirectoryIdentitySync(guard.dir, { dev: guard.stat.dev, ino: guard.stat.ino })
-    : fsSync.lstatSync(guard.dir);
+  if (typeof guard.stat.dev === "bigint" && typeof guard.stat.ino === "bigint") {
+    assertDirectoryIdentitySync(guard.dir, { dev: guard.stat.dev, ino: guard.stat.ino, realPath: guard.realPath });
+    return;
+  }
+  const stat = fsSync.lstatSync(guard.dir);
   if (stat.isSymbolicLink() || !stat.isDirectory()) {
     throw directoryComponentNotDirectoryError();
   }
@@ -54,14 +77,15 @@ export function createSyncDirectoryGuard(dir: string): SyncDirectoryGuard {
 }
 
 export function assertSyncDirectoryGuard(guard: SyncDirectoryGuard | AnyAsyncDirectoryGuard): void {
-  const stat = typeof guard.stat.dev === "bigint" && typeof guard.stat.ino === "bigint"
-    ? inspectFileIdentitySync(() => fsSync.lstatSync(guard.dir, { bigint: true }), { dev: guard.stat.dev, ino: guard.stat.ino })
-    : fsSync.lstatSync(guard.dir);
+  if (typeof guard.stat.dev === "bigint" && typeof guard.stat.ino === "bigint") {
+    assertDirectoryIdentitySync(guard.dir, { dev: guard.stat.dev, ino: guard.stat.ino, realPath: guard.realPath });
+    return;
+  }
+  const stat = fsSync.lstatSync(guard.dir);
   if (stat.isSymbolicLink() || !stat.isDirectory()) {
     throw directoryComponentNotDirectoryError();
   }
-  const realPath = typeof guard.stat.ino === "bigint"
-    ? realpathSync.native(guard.dir) : realpathSync(guard.dir);
+  const realPath = realpathSync(guard.dir);
   if (!sameFileIdentity(stat, guard.stat) || realPath !== guard.realPath) {
     throw new FsSafeError("path-mismatch", "directory changed during operation");
   }
@@ -113,12 +137,27 @@ export async function inspectDirectoryIdentity(dir: string, expected?: Pick<BigI
   return inspectDirectoryIdentitySync(dir, expected);
 }
 
+function directoryEntryPath(dir: string): string {
+  const windows = process.platform === "win32";
+  let rootLength = (windows ? path.win32 : path.posix).parse(dir).root.length;
+  if (windows && /^[\\/]{2}[?.][\\/]UNC[\\/]/i.test(dir)) {
+    // Node parses the namespace prefix as the root; retain the complete UNC share instead.
+    const uncRoot = path.win32.parse(`\\\\${dir.slice(8)}`).root;
+    if (uncRoot.length > 1) rootLength = Math.max(rootLength, uncRoot.length + 6);
+  }
+  let end = dir.length;
+  while (end > rootLength && (dir[end - 1] === "/" || (windows && dir[end - 1] === "\\"))) end--;
+  return end === rootLength || end === dir.length ? dir : dir.slice(0, end);
+}
+
 function inspectDirectoryIdentitySync(
   dir: string,
   expected?: Pick<BigIntStats, "dev" | "ino">,
 ): BigIntStats {
+  // A trailing separator makes lstat follow a final directory symlink.
+  const entryPath = directoryEntryPath(dir);
   return inspectFileIdentitySync(() => {
-    const stat = fsSync.lstatSync(dir, { bigint: true });
+    const stat = fsSync.lstatSync(entryPath, { bigint: true });
     if (stat.isSymbolicLink() || !stat.isDirectory()) throw directoryComponentNotDirectoryError();
     return stat;
   }, expected);
