@@ -55,6 +55,8 @@
 
 - Add synchronous path-local ASCII case probing with read-only mode, exact identity observations, owned temporary-file cleanup, and an explicit unknown result instead of operating-system guesses.
 
+- Add sorted recursive removal and explicit unlimited entry/depth budgets through `Root.remove`, with caller-relative failure context, preserved mutation authority and cancellation settlement, and continued sibling cleanup when a child directory disappears under `force`.
+
 ## 0.10.0 - 2026-09-13
 
 ### Highlights
