@@ -25,6 +25,7 @@
 - Keep durable-queue migrations bound to the pinned processing generation, rejecting stale callbacks after acknowledgement, quarantine, or replacement; release the verified read pin at Windows publication so migrations can replace their target; resync resumed claims so conditional migrations cannot bypass a failed publication sync on retry.
 - Keep Windows native filesystem descriptors in the host runtime's libuv table, rejecting missing or partial bridges instead of guessing raw HANDLE or add-on CRT namespaces.
 - Preserve files refreshed while expiry pruning prepares removal by rechecking current file type and modification time immediately before guarded deletion, without requiring read access.
+- Extend standalone walker regression and method-audit coverage with lexical aliases, callback mutation, and 1,000-entry inventories.
 - Speed up JavaScript gzip container-padding validation with bounded buffer comparisons and one lazy reusable zero window, preserving complete suffix checks, short-read handling, and cancellation cadence.
 - Speed up native plain-TAR inspection and extraction with bounded file read-ahead, preserving full framing, payload, trailer, and cancellation checks at parser boundaries.
 - Destroy and join JavaScript ZIP decoder sources before rejecting bounded member reads, preventing abandoned decoders and retained archive buffers after byte-limit failures while preserving archive error classifications on Node 22 and newer.
