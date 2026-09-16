@@ -155,9 +155,9 @@ describe.skipIf(process.platform !== "win32")("pinned write Windows pathname adm
     expect(loader).not.toHaveBeenCalled();
   });
 
-  it.runIf(bundledNative !== undefined)(
-    "rejects a native canonical parent alias before pathname inspection or staging",
-    async () => {
+  it.runIf(bundledNative !== undefined).each(["succeeds", "fails"] as const)(
+    "rejects a native canonical parent alias before pathname inspection or staging when close %s",
+    async (closeOutcome) => {
       const root = await tempRoot("fs-safe-pinned-canonical-");
       const binding = bundledNative!;
       const parentFds: number[] = [];
@@ -188,7 +188,7 @@ describe.skipIf(process.platform !== "win32")("pinned write Windows pathname adm
       const closeFailure = new Error("parent close failed after closing");
       const close = vi.spyOn(fsSync, "closeSync").mockImplementation((fd) => {
         realClose(fd);
-        if (parentFds.includes(fd)) throw closeFailure;
+        if (closeOutcome === "fails" && parentFds.includes(fd)) throw closeFailure;
       });
 
       await expect(runPinnedWriteHelper(baseParams({ rootPath: root })))
@@ -200,7 +200,7 @@ describe.skipIf(process.platform !== "win32")("pinned write Windows pathname adm
       expect(renameReplace).not.toHaveBeenCalled();
       expect(parentFds).toHaveLength(1);
       expect(rootFds).toHaveLength(1);
-      expect(close).toHaveBeenCalledWith(parentFds[0]);
+      expect(close.mock.calls.filter(([fd]) => fd === parentFds[0])).toHaveLength(1);
       expect(() => fsSync.fstatSync(parentFds[0]!)).toThrow(expect.objectContaining({ code: "EBADF" }));
       expect(() => fsSync.fstatSync(rootFds[0]!)).toThrow(expect.objectContaining({ code: "EBADF" }));
       await expect(fs.readdir(root)).resolves.toEqual([]);

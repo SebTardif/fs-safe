@@ -88,7 +88,10 @@ export async function openNativeRootAdmission(
     try {
       await root.close();
     } catch (closeError) {
-      throw createSuppressedError(closeError, error, "native root admission and close failed");
+      // Windows admission keeps the typed boundary failure primary.
+      if (process.platform !== "win32") {
+        throw createSuppressedError(closeError, error, "native root admission and close failed");
+      }
     }
     throw error;
   }
@@ -153,7 +156,9 @@ export async function openNativeParentAdmission(
     try {
       fsSync.closeSync(parentFd);
     } catch (closeError) {
-      throw createSuppressedError(closeError, error, "native parent admission and close failed");
+      if (process.platform !== "win32") {
+        throw createSuppressedError(closeError, error, "native parent admission and close failed");
+      }
     }
     throw error;
   }
