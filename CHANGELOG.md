@@ -53,6 +53,7 @@
 
 ### Validation and tooling
 
+- Update development dependencies to @napi-rs/cli 3.9.1, fast-check 4.10.0, and Vite 8.3.0 with verified registry integrity.
 - Add guarded-mkdir regressions for exact descendant receipts, rounded inode collisions, and bounded Windows unknown-identity recovery across ordinary and symlink-resolved directory branches.
 - Version mutation-policy proof receipts to distinguish observed preservation from scoped JavaScript mkdir counters, and add bounded public-package pinned-policy rejection, state-selected write-refusal, and Windows buffer-write/placeholder-cleanup cases with explicit built test-hook provenance.
 - Separate the reviewed manual method-audit harness from immutable candidate and baseline checkouts, validate and resolve dispatch inputs before platform fan-out, and support Node 22/24 plus rebuild and same-artifact controls without changing the ordinary PR/schedule benchmark job.
