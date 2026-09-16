@@ -82,6 +82,8 @@ import {
   type PinnedWriteTarget,
 } from "./root-write-admission.js";
 import { prepareSharedRootWriteTarget } from "./root-write-complete-parent.js";
+import { finishRootFallbackWrite } from "./root-write-publication.js";
+import { assertRootFallbackWritePath, withRootFallbackCompatibilityLock } from "./root-write-compatibility.js";
 import { inspectFileIdentity } from "./strict-file-identity.js";
 import { movePathNoReplaceNative } from "./root-move-noreplace.js";
 import { admitRootReadHandle, inspectOpenedPathIdentitySync } from "./root-read-admission.js";
@@ -163,7 +165,7 @@ function openResult(params: {
 
 async function openVerifiedLocalFile(
   filePath: string,
-  options?: { hardlinks?: HardlinkPolicy; symlinks?: SymlinkPolicy },
+  options?: { hardlinks?: HardlinkPolicy; symlinks?: SymlinkPolicy; readWrite?: true },
 ): Promise<{ opened: OpenResult; identity: BigIntStats }> {
   const fsSafeTestHooks = getFsSafeTestHooks();
   const { handle, stat, identity, preOpenStat } = await openLocalFileDescriptor(filePath, options);
@@ -720,6 +722,7 @@ async function openWritableFileInRoot(
     mutationSymlinks?: MutationSymlinkPolicy;
     truncateExisting?: boolean;
     append?: boolean;
+    expectedWritePath?: string;
   },
 ): Promise<WritableOpenResult> {
   const guardedTarget = params.denyMutations === undefined && params.mutationSymlinks === undefined
@@ -761,6 +764,8 @@ async function openWritableFileInRoot(
       throw err;
     }
   }
+
+  assertRootFallbackWritePath(params.expectedWritePath, ioPath);
   const mode = params.mode ?? 0o600;
 
   let handle: FileHandle;
@@ -856,6 +861,7 @@ async function openWritableFileInRoot(
     }
     realPath = admittedRealPath.path;
     realPathForCleanup = realPath;
+    assertRootFallbackWritePath(params.expectedWritePath, realPath);
     const writeSelection = writePathSelection
       ? createRootWriteSelectionForFd(writePathSelection, handle.fd)
       : undefined;
@@ -1459,8 +1465,22 @@ async function writeFileFallback(
   root: RootContext,
   params: RootWriteOptions & { relativePath: string; data: string | Buffer },
 ): Promise<void> {
+  if (params.renameIdentity !== "verify-content-with-lock") return await writeFileFallbackUnlocked(root, params);
+  const policy = snapshotPinnedMutationPolicy(params.denyMutations, params.mutationSymlinks);
+  if (policy) params = { ...params, ...policy };
+  const { rootReal, resolved } = await resolveGuardedWritePathInRoot(root, params);
+  await withRootFallbackCompatibilityLock({
+    rootPath: rootReal, rootIdentity: root.rootIdentity, targetPath: resolved, assertBeforeMutation: params.assertBeforeMutation,
+  }, async ({ targetPath, ...binding }) => await writeFileFallbackUnlocked(root, { ...params, ...binding }, targetPath));
+}
+
+async function writeFileFallbackUnlocked(
+  root: RootContext,
+  params: RootWriteOptions & { relativePath: string; data: string | Buffer },
+  expectedWritePath?: string,
+): Promise<void> {
   if (params.overwrite === false) {
-    await writeMissingFileFallback(root, params);
+    await writeMissingFileFallback(root, params, expectedWritePath);
     return;
   }
 
@@ -1473,6 +1493,7 @@ async function writeFileFallback(
     assertBeforeMutation: params.assertBeforeMutation,
     mutationSymlinks: params.mutationSymlinks,
     truncateExisting: false,
+    expectedWritePath,
   });
   const policyEnabled = params.denyMutations !== undefined || params.mutationSymlinks !== undefined;
   const retainedSelection = policyEnabled ? takeRootWriteSelection(target) : undefined;
@@ -1541,29 +1562,13 @@ async function writeFileFallback(
     });
     unregisterTempPath();
     unregisterTempPath = null;
-    // Final mode via the retained handle after publication, as the native writer does.
-    try {
-      await writtenHandle.chmod(mode);
-    } catch (error) {
-      await cleanupPinnedFilePath({
-        pathname: destinationPath, handle: writtenHandle, identity: writtenIdentity, parentGuard: destinationGuard,
-      });
-      throw error;
-    }
-    if (params.durable !== false) await writtenHandle.sync();
-    try {
-      await verifyAtomicWriteResult({
-        root,
-        targetPath: destinationPath,
-        expectedIdentity: writtenIdentity,
-        fd: writtenHandle.fd,
-        parentGuard: destinationGuard,
-      });
-    } catch (err) {
-      emitWriteBoundaryWarning(`post-write verification failed: ${String(err)}`);
-      throw err;
-    }
-    if (params.durable !== false) await syncDirectoryBestEffort(path.dirname(destinationPath));
+    await finishRootFallbackWrite({
+      root, targetPath: destinationPath, handle: writtenHandle, identity: writtenIdentity,
+      parentGuard: destinationGuard, mode, options: params,
+      // Read/write access is needed to sync the accepted destination on Windows.
+      openForCompatibility: () => openVerifiedLocalFile(destinationPath, { hardlinks: "reject", readWrite: true }),
+      onVerificationFailure: err => emitWriteBoundaryWarning(`post-write verification failed: ${String(err)}`),
+    });
   } finally {
     if (!published && target.createdForWrite) {
       await cleanupPinnedFilePath({
@@ -1584,6 +1589,7 @@ async function writeFileFallback(
 async function writeMissingFileFallback(
   root: RootContext,
   params: RootWriteOptions & { relativePath: string; data: string | Buffer },
+  expectedWritePath?: string,
 ): Promise<void> {
   const guardedTarget = params.denyMutations === undefined && params.mutationSymlinks === undefined
     ? undefined
@@ -1603,6 +1609,7 @@ async function writeMissingFileFallback(
   const preparedParent = prepared?.preparedParent;
   const targetPath = prepared?.targetPath ?? (params.mkdir === false ? resolved :
     await prepareRootWriteTarget(root, resolved, params.assertBeforeMutation));
+  assertRootFallbackWritePath(expectedWritePath, targetPath);
   const pathSelection = guardedTarget
     ? await prepareGuardedRootWritePathSelection(
       guardedTarget,

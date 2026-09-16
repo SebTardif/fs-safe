@@ -34,6 +34,7 @@ export async function openLocalFileDescriptor(
   options?: {
     hardlinks?: HardlinkPolicy;
     symlinks?: SymlinkPolicy;
+    readWrite?: true;
   },
 ): Promise<OwnedLocalFile> {
   assertNoUnsafeDeviceReadPath(filePath);
@@ -64,9 +65,9 @@ export async function openLocalFileDescriptor(
     await fsSafeTestHooks?.afterPreOpenLstat?.(filePath);
   }
 
-  const openFlags = options?.symlinks === "follow-within-root"
+  const openFlags = (options?.symlinks === "follow-within-root"
     ? OPEN_READ_FOLLOW_FLAGS
-    : OPEN_READ_FLAGS;
+    : OPEN_READ_FLAGS) | (options?.readWrite ? fsSync.constants.O_RDWR : 0);
   await fsSafeTestHooks?.beforeOpen?.(filePath, openFlags);
   let handle: FileHandle;
   try {
