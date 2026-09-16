@@ -1,10 +1,12 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import { runBoundedProcess } from "../scripts/mutation-policy-proof.mjs";
 import { expectFsSafeErrorSync, expectFsSafeError } from "./helpers/security.js";
 import { useTempDirs } from "./helpers/vitest.js";
+import { useSuiteFixture } from "./helpers/suite-fixture.js";
 import {
   acquireFileLock,
   acquireFileLockSync,
@@ -15,8 +17,6 @@ import { createSidecarLockManager } from "../src/sidecar-lock.js";
 const childTarget = process.env.FS_SAFE_STRESS_LOCK_TARGET;
 const childLog = process.env.FS_SAFE_STRESS_LOCK_LOG;
 const { tempRoot } = useTempDirs();
-
-
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -138,43 +138,48 @@ describe("file-lock concurrency stress", () => {
     await expect(fs.stat(`${targetPath}.lock`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it.runIf(!childTarget)(
-    "never overlaps holders across real child processes",
-    async () => {
-      const root = await tempRoot("fs-safe-lock-child-process-");
-      const targetPath = path.join(root, "state.json");
-      const logPath = path.join(root, "critical-sections.log");
+  describe.runIf(!childTarget)("real child processes", () => {
+    let directory: string | undefined;
+    const run = useSuiteFixture(async () => {
+      directory = await fs.mkdtemp(path.join(os.tmpdir(), "fs-safe-lock-child-process-"));
+      const targetPath = path.join(directory, "state.json");
+      const logPath = path.join(directory, "critical-sections.log");
       const vitestPath = path.resolve("node_modules/vitest/vitest.mjs");
       const testPath = path.relative(process.cwd(), import.meta.filename);
+      // Eight real processes remain independent; their test workers stay inside
+      // those processes so the watchdog can kill and reap the complete holder.
+      const children = Array.from({ length: 8 }, (_, index) => runBoundedProcess(
+        process.execPath,
+        [vitestPath, "run", testPath, "--pool=threads", "--maxWorkers=1", "--silent"],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            FS_SAFE_STRESS_LOCK_TARGET: targetPath,
+            FS_SAFE_STRESS_LOCK_LOG: logPath,
+            FS_SAFE_STRESS_LOCK_INDEX: String(index),
+          },
+          timeoutMs: 45_000,
+          maxStdoutBytes: 16_384,
+        },
+      ));
+      // Do not let one failed child release fixture ownership before its peers close.
+      const settled = await Promise.allSettled(children);
+      const failures = settled.flatMap((result, index) => {
+        if (result.status === "rejected") return [{ index, error: String(result.reason) }];
+        const { stdout, ...details } = result.value;
+        return details.exitCode === 0 && details.signal === null && details.reaped &&
+          !details.timedOut && !details.overflow && !details.spawnCode
+          ? [] : [{ index, error: JSON.stringify({ ...details, stdout: stdout.toString("utf8").slice(-2_000) }) }];
+      });
+      if (failures.length > 0) throw new Error(`lock child processes failed: ${JSON.stringify(failures)}`);
+      return { targetPath, logPath };
+    }, async () => {
+      // useSuiteFixture drains setup (including each child's close) before cleanup.
+      if (directory) await fs.rm(directory, { recursive: true, force: true });
+    }, 60_000);
 
-      const children = Array.from({ length: 8 }, (_, index) =>
-        new Promise<void>((resolve, reject) => {
-          const child = spawn(
-            process.execPath,
-            [vitestPath, "run", testPath, "--maxWorkers=1", "--silent"],
-            {
-              env: {
-                ...process.env,
-                FS_SAFE_STRESS_LOCK_TARGET: targetPath,
-                FS_SAFE_STRESS_LOCK_LOG: logPath,
-                FS_SAFE_STRESS_LOCK_INDEX: String(index),
-              },
-              stdio: ["ignore", "ignore", "pipe"],
-            },
-          );
-          let stderr = "";
-          child.stderr.on("data", (chunk) => {
-            stderr += String(chunk);
-          });
-          child.once("error", reject);
-          child.once("exit", (code) => {
-            if (code === 0) resolve();
-            else reject(new Error(`lock child ${index} exited ${code}: ${stderr}`));
-          });
-        }),
-      );
-      await Promise.all(children);
-
+    it("never overlaps holders across real child processes", () => run(async ({ targetPath, logPath }) => {
       const events = (await fs.readFile(logPath, "utf8"))
         .trim()
         .split("\n")
@@ -193,9 +198,8 @@ describe("file-lock concurrency stress", () => {
       expect(peak).toBe(1);
       expect(active.size).toBe(0);
       await expect(fs.stat(`${targetPath}.lock`)).rejects.toMatchObject({ code: "ENOENT" });
-    },
-    20_000,
-  );
+    }));
+  });
 
   it.runIf(!!childTarget)("holds one cross-process critical section", async () => {
     const owner = `${process.pid}:${process.env.FS_SAFE_STRESS_LOCK_INDEX ?? "unknown"}`;
