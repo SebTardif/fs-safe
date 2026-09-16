@@ -291,7 +291,7 @@ function expectedCoverage(platform) {
         "posix-pinned-routes-not-applicable",
         "root-replacement-not-hosted-on-windows",
         "stale-receipt-refresh-bound-to-hashed-internal-tests",
-        "compat-require-buffer-route-does-not-load-native-addon",
+        "compat-require-native-addon-use-is-lock-publication",
       ]
       : [
         "awaited-admission-seams-bound-to-hashed-internal-tests",
@@ -379,7 +379,7 @@ function exactObservationValues(observations, expected) {
 
 function validateSuccessfulObservations(caseName, backend, observations, platform) {
   const common = {
-    addonLoaded: backend === "pinned-native/require",
+    addonLoaded: backend === "pinned-native/require" || backend === "windows-js/require",
     builtPublicImport: true,
     node24: true,
     privateFixture: true,
@@ -1547,8 +1547,11 @@ async function runWorker(argv) {
     const observations = await withFixture(caseName, async (fixture) =>
       await executeWorkerCase(caseName, api, fixture));
     const loadedAfter = await addonLoaded(addonPath);
-    if (backend === "pinned-native/require") invariant(loadedAfter, "REQUIRED_ADDON_NOT_LOADED");
-    else invariant(!loadedAfter, "UNEXPECTED_ADDON_LOADED");
+    // Windows compatibility payload writes stay in JS; the retained sidecar
+    // lock is published through Root.create and uses native mode when required.
+    const requiresAddon = backend === "pinned-native/require" || backend === "windows-js/require";
+    invariant(loadedAfter === requiresAddon,
+      requiresAddon ? "REQUIRED_ADDON_NOT_LOADED" : "UNEXPECTED_ADDON_LOADED");
     await new Promise((resolve) => setImmediate(resolve));
     invariant(unhandled === undefined, "UNHANDLED_REJECTION");
     receipt.observations = {

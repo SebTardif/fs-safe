@@ -66,7 +66,7 @@ function pendingReceipt(overrides: Record<string, unknown> = {}) {
 
 function observationsForCase(name: string, backend: string) {
   const common = {
-    addonLoaded: backend === "pinned-native/require",
+    addonLoaded: backend === "pinned-native/require" || backend === "windows-js/require",
     builtPublicImport: true,
     node24: true,
     privateFixture: true,
@@ -306,6 +306,22 @@ describe("mutation policy hosted proof contract", () => {
       runtime: { arch: process.arch, libuv: "1", node: "v20.1.0", platform: process.platform, v8: "1" },
     });
     expect(validateFinalReceiptText(canonicalReceipt(preSetup))).toEqual(preSetup);
+  });
+
+  it("requires native lock publication in Windows compatibility proof receipts", () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const arch = Object.getOwnPropertyDescriptor(process, "arch")!;
+    Object.defineProperties(process, { platform: { value: "win32" }, arch: { value: "x64" } });
+    try {
+      const receipt = passedReceipt();
+      const compatibility = receipt.cases.find(entry => entry.case === "windows-buffer-write-require")!;
+      compatibility.observations.addonLoaded = true;
+      expect(validateFinalReceiptText(canonicalReceipt(receipt))).toEqual(receipt);
+      compatibility.observations.addonLoaded = false;
+      expect(validateFinalReceiptText(canonicalReceipt(receipt))).toBeNull();
+    } finally {
+      Object.defineProperties(process, { platform, arch });
+    }
   });
 
   it("canonicalizes an aliased temporary fixture and cleans its created spelling", async () => {

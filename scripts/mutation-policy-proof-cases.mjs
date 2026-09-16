@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -240,6 +241,11 @@ async function windowsWriteCases(definition, api, fixture, helpers) {
   const { io, invariant, PAYLOAD } = helpers;
   const compatibility = definition.backend.endsWith("/require")
     ? { renameIdentity: "verify-content-with-lock" } : {};
+  // The callback runs under the documented lock for the effective "selected"
+  // target. Post-operation assertions below still require its removal.
+  const activeLockEntries = compatibility.renameIdentity
+    ? [`.fs-safe-write-${createHash("sha256").update("selected").digest("hex")}.lock`]
+    : [];
   for (const scenario of ["stable", "stage-placeholder", "publish-placeholder", "publish-alias"]) {
     const scope = await subroot(fixture, scenario, api, io);
     const aliasCase = scenario === "stable" || scenario === "publish-alias";
@@ -268,7 +274,7 @@ async function windowsWriteCases(definition, api, fixture, helpers) {
         }
         if (scenario === "stage-placeholder") {
           if (!placeholderObserved) return false;
-          assertEntries(scope.directory, ["selected", "sentinel"], invariant);
+          assertEntries(scope.directory, [...activeLockEntries, "selected", "sentinel"], invariant);
           return true;
         }
         observedStage = completeStage(scope.directory, PAYLOAD, invariant);
