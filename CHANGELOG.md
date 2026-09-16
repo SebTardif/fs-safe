@@ -9,6 +9,7 @@
 
 ### Security
 
+- Snapshot secure-read policies, trusted-directory inputs, and selected environment values before asynchronous I/O so callers cannot change in-flight admission.
 - Recheck copied-directory identities after awaited child cleanup and before removal, preserving concurrently substituted directories.
 - Verify writable-file admission and post-open identity using private bigint receipts while retaining the public numeric Stats contract.
 - Bind secure temporary-directory mode repairs to no-follow descriptors and exact pathname identity, preserving concurrent replacements and failing closed on unverifiable repair.

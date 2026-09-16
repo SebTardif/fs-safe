@@ -162,6 +162,15 @@ successful read, including in native-off mode. All successful rows check the
 returned bytes. Detection uses the selected `--dist` directory, so a saved
 current build is not mistaken for a legacy baseline. These labels retain
 `readSecureFile` callable coverage; rejection timing is not successful-read timing.
+Each secure-read contract also has a `/trusted-root` row with one absolute
+trusted directory. The original row has no directory allowlist, allowing the
+same native-off/required comparison to measure both policies. Two successful
+`permissions-skipped` rows isolate synchronous policy-copy costs on every
+platform and native mode: one supplies 64 environment keys, while the other
+checks eight existing absolute trusted directories and admits on the last.
+Their fixtures and complete policy objects are prepared outside timing. Checked
+warmup and mandatory untimed invocations verify returned bytes, canonical path,
+and omitted permission evidence; timed samples perform no verification work.
 
 `resolveSecureTempRoot/existing`, `/create`, `/repair`, and `/reject` distinguish
 the secure-directory fast path, creation/finalization, mode repair, and unsafe

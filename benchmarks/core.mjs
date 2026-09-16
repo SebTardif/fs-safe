@@ -200,7 +200,53 @@ export async function registerCore({ api: a, workspace: w, binding, measuredFeat
   const { name: secureReadName, ...secureReadOptions } = secureFileBenchmarkCase({
     platform: process.platform, measuredFeatures, binding,
   }, data);
+  const secureReadRealPath = fs.realpathSync.native(input);
+  const verifyPermissionSkippedSecureRead = (result) => {
+    assert.deepEqual(result.buffer, data);
+    assert.equal(result.realPath, secureReadRealPath);
+    assert.equal(result.permissions, undefined);
+  };
+  const suppliedSecureReadEnv = {
+    SystemRoot: "C:\\fs-safe-benchmark-system-root",
+    WINDIR: "C:\\fs-safe-benchmark-windows-dir",
+    ...Object.fromEntries(Array.from({ length: 62 }, (_, index) => [
+      `FS_SAFE_BENCHMARK_ENV_${index.toString().padStart(2, "0")}`,
+      `synthetic-value-${index.toString().padStart(2, "0")}-for-snapshot`,
+    ])),
+  };
+  assert.equal(Object.keys(suppliedSecureReadEnv).length, 64);
+  const nonmatchingTrustedDirs = Array.from({ length: 7 }, (_, index) => {
+    const directory = path.join(w, `secure-read-nonmatching-root-${index}`);
+    fs.mkdirSync(directory);
+    return directory;
+  });
+  const eightTrustedDirs = [...nonmatchingTrustedDirs, w];
+  const suppliedEnvSecureReadOptions = {
+    filePath: input,
+    permissions: { allowInsecure: true },
+    inject: { env: suppliedSecureReadEnv },
+    io: { maxBytes: 1024 },
+  };
+  const eightTrustedDirsSecureReadOptions = {
+    filePath: input,
+    trust: { trustedDirs: eightTrustedDirs },
+    permissions: { allowInsecure: true },
+    io: { maxBytes: 1024 },
+  };
   add(secureReadName, () => a.readSecureFile({ filePath: input, io: { maxBytes: 1024 } }), secureReadOptions);
+  add(`${secureReadName}/trusted-root`, () => a.readSecureFile({
+    filePath: input, trust: { trustedDirs: [w] }, io: { maxBytes: 1024 },
+  }), secureReadOptions);
+  add("readSecureFile/permissions-skipped/supplied-env-64", () =>
+    a.readSecureFile(suppliedEnvSecureReadOptions), {
+    verify: verifyPermissionSkippedSecureRead,
+    workloadDetails: { permissionVerification: "skipped", suppliedEnvironmentKeys: 64 },
+  });
+  add("readSecureFile/permissions-skipped/trusted-roots-8", () =>
+    a.readSecureFile(eightTrustedDirsSecureReadOptions), {
+    verify: verifyPermissionSkippedSecureRead,
+    workloadDetails: { permissionVerification: "skipped", trustedDirectories: 8, nonmatchingDirectories: 7 },
+  });
   for (const name of ["readRegularFile", "readRegularFileSync", "statRegularFile", "statRegularFileSync"]) add(name, () => a[name](name.startsWith("stat") ? input : { filePath: input }), { sync: name.endsWith("Sync") });
   for (const name of ["appendRegularFile", "appendRegularFileSync"]) add(name, () => a[name]({ filePath: path.join(w, "append.txt"), content: data }), { sync: name.endsWith("Sync"), before: () => fs.writeFileSync(path.join(w, "append.txt"), data) });
   for (const name of ["openRootFile", "openRootFileSync"]) add(name, () => a[name]({ absolutePath: input, rootPath: w, boundaryLabel: "benchmark" }), { sync: name.endsWith("Sync"), verify: (r) => assert(r.ok), after: (r) => { if (r?.ok) fs.closeSync(r.fd); } });

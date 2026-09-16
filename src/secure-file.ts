@@ -27,6 +27,7 @@ import { inspectFileIdentity } from "./strict-file-identity.js";
 import { inspectSecureWindowsDescriptor } from "./secure-file-windows.js";
 import { scheduleTimeout } from "./timing.js";
 import {
+  anchorWindowsDriveRelativePath,
   assertNoWindowsPathAlias,
   resolvePathPreservingWindowsRoot,
 } from "./windows-path-alias.js";
@@ -65,28 +66,74 @@ export type SecureFileReadResult = {
   permissions?: PermissionCheck;
 };
 
-function snapshotSecureFileReadOptions(
+function snapshotTrustedDirs(dirs: string[] | undefined): string[] | undefined {
+  if (dirs === undefined) return undefined;
+  if (!Array.isArray(dirs)) {
+    throw new FsSafeError("invalid-path", "trustedDirs must be an array of path strings.");
+  }
+  const trustedDirs: string[] = [];
+  const length = dirs.length;
+  if (!Number.isSafeInteger(length) || length < 0 || length > 0xffff_ffff) {
+    throw new FsSafeError("invalid-path", "trustedDirs must have a valid array length.");
+  }
+  for (let index = 0; index < length; index += 1) {
+    if (!Object.hasOwn(dirs, index)) {
+      throw new FsSafeError("invalid-path", "trustedDirs must not contain sparse entries.");
+    }
+    const dir = dirs[index];
+    if (typeof dir !== "string" || dir.includes("\0")) {
+      throw new FsSafeError("invalid-path", "trustedDirs must contain only path strings without null bytes.");
+    }
+    // Admit the raw suffix before normalization can erase an alternate stream,
+    // while retaining Node's per-drive cwd semantics for D:credentials.
+    const anchored = anchorWindowsDriveRelativePath(dir);
+    assertNoWindowsPathAlias(anchored, "filesystem", "trusted directory uses a Windows filesystem namespace alias");
+    const resolved = resolvePathPreservingWindowsRoot(anchored);
+    assertNoWindowsPathAlias(resolved, "filesystem", "trusted directory uses a Windows filesystem namespace alias");
+    trustedDirs.push(resolved);
+  }
+  return trustedDirs;
+}
+
+function snapshotPermissionEnv(env: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv | undefined {
+  if (env === undefined) return undefined;
+  const snapshot = { ...env };
+  // Windows command lookup first reads these exact names, even when inherited
+  // or non-enumerable, then considers only enumerable own case variants.
+  // Reuse copied values so enumerable getters are not invoked a second time.
+  if (!Object.hasOwn(snapshot, "SystemRoot")) snapshot.SystemRoot = env.SystemRoot;
+  if (!Object.hasOwn(snapshot, "WINDIR")) snapshot.WINDIR = env.WINDIR;
+  return snapshot;
+}
+
+function snapshotSecureFileOptions(
   options: SecureFileReadOptions,
   io: SecureFileIoOptions | undefined,
+  maxBytes: number | undefined,
 ): SecureFileReadOptions {
-  const filePath = options.filePath;
-  const trustInput = options.trust;
-  const trustedDirsInput = trustInput?.trustedDirs;
-  const trustedDirs = trustedDirsInput === undefined ? undefined : [...trustedDirsInput];
-  const trust = trustInput === undefined
-    ? undefined
-    : {
-        allowSymlink: trustInput.allowSymlink,
-        allowNetworkPath: trustInput.allowNetworkPath,
-        ...(trustedDirs === undefined ? {} : { trustedDirs }),
-      };
+  const { filePath, label, trust, permissions, inject } = options;
+  const env = inject?.env;
   return {
     filePath,
-    label: options.label,
-    trust,
-    permissions: options.permissions,
-    inject: options.inject,
-    io,
+    label,
+    trust: {
+      trustedDirs: snapshotTrustedDirs(trust?.trustedDirs),
+      allowSymlink: trust?.allowSymlink,
+      allowNetworkPath: trust?.allowNetworkPath,
+    },
+    permissions: {
+      allowInsecure: permissions?.allowInsecure,
+      allowReadableByOthers: permissions?.allowReadableByOthers,
+    },
+    inject: {
+      platform: inject?.platform,
+      env: snapshotPermissionEnv(env),
+      exec: inject?.exec,
+    },
+    io: {
+      maxBytes,
+      timeoutMs: io?.timeoutMs,
+    },
   };
 }
 
@@ -193,14 +240,11 @@ async function assertTrustedDirs(options: SecureFileReadOptions, realPath: strin
   }
   const trusted = await Promise.all(
     options.trust.trustedDirs.map(async (dir) => {
-      assertNoWindowsPathAlias(dir, "filesystem", "trusted directory uses a Windows filesystem namespace alias");
-      const resolved = resolvePathPreservingWindowsRoot(dir);
-      assertNoWindowsPathAlias(resolved, "filesystem", "trusted directory uses a Windows filesystem namespace alias");
       let realPath: string;
       try {
-        realPath = realpathSync.native(resolved);
+        realPath = realpathSync.native(dir);
       } catch {
-        return resolved;
+        return dir;
       }
       assertNoWindowsPathAlias(realPath, "filesystem", "trusted directory uses a Windows filesystem namespace alias");
       return realPath;
@@ -329,16 +373,13 @@ export async function readSecureFile(
 ): Promise<SecureFileReadResult> {
   const io = options.io;
   const maxBytes = normalizeMaxBytes(io?.maxBytes);
-  const ownedOptions = snapshotSecureFileReadOptions(options, io);
-  assertNoWindowsPathAlias(ownedOptions.filePath, "filesystem", `${label(ownedOptions)} path uses a Windows filesystem namespace alias`);
-  for (const trustedDir of ownedOptions.trust?.trustedDirs ?? []) {
-    assertNoWindowsPathAlias(trustedDir, "filesystem", "trusted directory uses a Windows filesystem namespace alias");
-  }
-  const opened = await openSecureHandle(ownedOptions, maxBytes);
+  options = snapshotSecureFileOptions(options, io, maxBytes);
+  assertNoWindowsPathAlias(options.filePath, "filesystem", `${label(options)} path uses a Windows filesystem namespace alias`);
+  const opened = await openSecureHandle(options, maxBytes);
   try {
-    await assertTrustedDirs(ownedOptions, opened.realPath);
+    await assertTrustedDirs(options, opened.realPath);
     const permissions = await assertSecurePermissions(
-      ownedOptions,
+      options,
       opened.pathStat,
       opened.realPath,
       opened.identity,
@@ -346,7 +387,7 @@ export async function readSecureFile(
     );
     const buffer = await readHandleWithTimeout(
       opened.handle,
-      ownedOptions.io?.timeoutMs,
+      options.io?.timeoutMs,
       maxBytes,
     );
     const finalIdentity = await inspectFileIdentity(
@@ -354,9 +395,9 @@ export async function readSecureFile(
       opened.identity,
     );
     if (!finalIdentity.isFile()) {
-      throw new FsSafeError("not-file", `${label(ownedOptions)} must remain a file: ${ownedOptions.filePath}`);
+      throw new FsSafeError("not-file", `${label(options)} must remain a file: ${options.filePath}`);
     }
-    assertNotHardlinked(ownedOptions, finalIdentity);
+    assertNotHardlinked(options, finalIdentity);
     return { buffer, realPath: opened.realPath, stat: opened.pathStat, permissions };
   } finally {
     await opened.handle.close().catch(() => undefined);

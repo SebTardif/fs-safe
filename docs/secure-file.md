@@ -62,6 +62,10 @@ type SecureFileReadOptions = {
 
 `io.maxBytes` must be a non-negative safe integer or positive `Infinity`; zero is an active cap and `Infinity` disables the cap. Invalid limits reject before filesystem admission.
 
+The helper synchronously snapshots the supplied options, including nested permission and I/O settings, the injection callback, and supplied injection environment values, before opening the file or reaching its first `await`. Mutating those objects after this snapshot does not change that read's policy. This is not an atomic snapshot at invocation entry: caller getters run during snapshot construction and can affect values or working directories that have not yet been captured. `trust.trustedDirs` must be an array with a valid length and an own string entry without null bytes at every index; malformed lengths or entries, including sparse entries filled by inherited properties, reject with `invalid-path` before filesystem admission. An omitted or empty array leaves the read unrestricted by directory.
+
+Relative trusted directories (including an empty string) are resolved to absolute lexical paths during this synchronous snapshot using Node's `path.resolve()` semantics. Windows drive-relative entries retain their per-drive current-directory semantics, and extended-length drive roots retain their root separator. Raw alternate-stream and filesystem-namespace aliases reject before normalization. Working-directory changes after the snapshot cannot redirect this allowlist. The existing realpath check still follows trusted-directory symlinks when it runs and falls back to the captured lexical path if realpath lookup fails; the allowlist does not pin directory identities.
+
 `permissions.allowInsecure` is a migration escape hatch. Prefer fixing permissions and using [`formatPermissionRemediation`](permissions.md) to show the user what to run. `trust.allowNetworkPath` is off by default because UNC paths are remote authority, not local filesystem input. `inject` is for tests and platform adapters; production callers usually leave it unset.
 
 On an actual Windows process with effective `platform: "win32"`, `inject.env` and `inject.exec` do not replace descriptor inspection. They remain available to simulated Windows checks on non-Windows hosts.
@@ -74,7 +78,7 @@ On an actual Windows process with effective `platform: "win32"`, `inject.env` an
 
 | Code | Meaning |
 |---|---|
-| `invalid-path` | `filePath` was not a local absolute path, or a Windows `filePath`/trusted directory used an alternate-stream or filesystem-namespace alias. |
+| `invalid-path` | `filePath` was not a local absolute path, `trust.trustedDirs` contained malformed paths, or a Windows file path/trusted directory used an alternate-stream or filesystem-namespace alias. |
 | `not-found` | The path could not be stat'd before open. |
 | `not-file` | The opened target is not a regular file. |
 | `symlink` | The path is a symlink and `trust.allowSymlink` is false. |
