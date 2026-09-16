@@ -105,7 +105,8 @@ describe("Windows filesystem namespace admission for output and temp helpers", (
     const open = vi.spyOn(fs, "open");
     const rename = vi.spyOn(fs, "rename");
     await expect(writeCallbackSibling({
-      tempPath,
+      tempDir: root,
+      tempName: path.basename(tempPath),
       write: producer,
       producerIsolation: "private-directory",
       resolveFinalPath: () => finalAlias,
@@ -300,10 +301,11 @@ describe("Windows filesystem namespace admission for output and temp helpers", (
     });
     await temporary.cleanup();
 
-    const siblingSource = path.join(root, "stage:source");
+    const siblingSource = path.join(root, "stage-source");
     const siblingFinal = path.join(root, "final:value");
     await writeCallbackSibling({
-      tempPath: siblingSource,
+      tempDir: root,
+      tempName: path.basename(siblingSource),
       write: async (candidate) => await fs.writeFile(candidate, "sibling"),
       resolveFinalPath: () => siblingFinal,
       syncTempFile: false,

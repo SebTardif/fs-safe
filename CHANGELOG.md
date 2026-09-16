@@ -11,6 +11,7 @@
 
 ### Security
 
+- Sanitize fallback filenames and validate completed sibling callback components before producers run, retaining bounded names and Windows device-name rejection.
 - Stop zstd and bzip2 compressed-input refills after cancellation while retaining decoded-output and complete archive validation.
 - Bind ZIP physical entry names and kinds to decoder metadata before callbacks or member selection, rejecting ambiguous interpretations consistently.
 - Snapshot secure-read policies, trusted-directory inputs, and selected environment values before asynchronous I/O so callers cannot change in-flight admission.

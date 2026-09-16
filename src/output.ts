@@ -144,7 +144,7 @@ export async function writeExternalFileWithinRoot<T = void>(
   }
 }
 
-function buildSiblingTempPath(targetPath: string, fallbackFileName?: string): string {
+function buildSiblingTempName(targetPath: string, fallbackFileName?: string): string {
   const prefix = `.fs-safe-output-${process.pid}-${randomUUID()}-`;
   const suffix = ".part";
   const safeTail = fitFileNameToPortableComponent({
@@ -152,7 +152,7 @@ function buildSiblingTempPath(targetPath: string, fallbackFileName?: string): st
     fileName: tempFileNameForTarget(targetPath, fallbackFileName),
     suffix,
   });
-  return path.join(path.dirname(targetPath), `${prefix}${safeTail}${suffix}`);
+  return `${prefix}${safeTail}${suffix}`;
 }
 
 async function writeExternalFileViaSibling<T>(params: {
@@ -167,7 +167,8 @@ async function writeExternalFileViaSibling<T>(params: {
   const finalPath = path.resolve(params.finalPath);
   assertNoWindowsPathAlias(finalPath, "filesystem", "output target uses a Windows filesystem namespace alias");
   const { result } = await writeCallbackSibling({
-    tempPath: buildSiblingTempPath(finalPath, params.fallbackFileName),
+    tempDir: path.dirname(finalPath),
+    tempName: buildSiblingTempName(finalPath, params.fallbackFileName),
     write: params.write,
     producerIsolation: params.producerIsolation,
     resolveFinalPath: () => finalPath,

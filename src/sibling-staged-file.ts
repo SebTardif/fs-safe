@@ -22,7 +22,41 @@ import { inspectFileIdentity } from "./strict-file-identity.js";
 import { registerTempPathForExit, type TempPathRegistration } from "./temp-cleanup.js";
 import { createOwnedTempFile } from "./temp-target.js";
 import { serializePathWrite } from "./write-queue.js";
-import { assertNoWindowsPathAlias } from "./windows-path-alias.js";
+import {
+  assertNoWindowsPathAlias,
+  resolvePathPreservingWindowsRoot,
+} from "./windows-path-alias.js";
+
+const INVALID_CALLBACK_COMPONENT_CHARACTERS = /[\u0000-\u001f\u007f-\u009f<>:"/\\|?*]/u;
+
+function resolveCallbackTempDirectory(workspaceDir: string): string {
+  assertNoWindowsPathAlias(workspaceDir, "filesystem", "sibling temp parent uses a Windows filesystem namespace alias");
+  const dir = resolvePathPreservingWindowsRoot(workspaceDir);
+  assertNoWindowsPathAlias(dir, "filesystem", "sibling temp parent uses a Windows filesystem namespace alias");
+  return dir;
+}
+
+export function resolveCallbackTempPath(workspaceDir: string, component: string): string {
+  const dir = resolveCallbackTempDirectory(workspaceDir);
+  if (
+    typeof component !== "string" ||
+    component === "" ||
+    component === "." ||
+    component === ".." ||
+    INVALID_CALLBACK_COMPONENT_CHARACTERS.test(component) ||
+    component.endsWith(".") ||
+    component.endsWith(" ") ||
+    isWindowsReservedDeviceName(component)
+  ) {
+    throw new FsSafeError("invalid-path", "callback temp name must be one path component");
+  }
+  const joined = path.join(dir, component);
+  assertNoWindowsPathAlias(joined, "filesystem", "sibling temp path uses a Windows filesystem namespace alias");
+  if (path.dirname(joined) !== dir) {
+    throw new FsSafeError("invalid-path", "callback temp path must be a direct workspace child");
+  }
+  return joined;
+}
 
 function assertRegularFile(stat: BigIntStats): void {
   if (stat.isSymbolicLink()) {
@@ -42,12 +76,6 @@ async function inspectStage(inspect: () => BigIntStats, expected?: BigIntStats) 
     assertRegularFile(stat);
     return stat;
   }, expected);
-}
-
-export function assertCallbackTempPathDeviceSafe(tempPath: string): void {
-  if (isWindowsReservedDeviceName(tempPath)) {
-    throw new FsSafeError("invalid-path", "callback temp path uses a reserved Windows device name");
-  }
 }
 
 type IsolatedProducerResult<T> = {
@@ -110,19 +138,20 @@ async function writeIsolatedProducer<T>(params: {
     assertWorkspace();
   };
   try {
+    const producerPath = resolveCallbackTempPath(target.dir, path.basename(target.path));
     assertCurrent();
-    const result = await Reflect.apply(write, writeReceiver, [target.path]);
+    const result = await Reflect.apply(write, writeReceiver, [producerPath]);
     assertCurrent();
     if (native) {
       await targetRoot.move(
-        path.relative(targetRoot.rootReal, target.path),
+        path.relative(targetRoot.rootReal, producerPath),
         path.basename(tempPath),
         { assertBeforeMutation: assertCurrent },
       );
       return { cleanupWorkspace, result };
     }
     const handoff = await handoffPrivateProducerFile({
-      sourcePath: target.path,
+      sourcePath: producerPath,
       targetPath: tempPath,
       assertSourceParent: assertWorkspace,
       assertTargetParent: assertParent,
@@ -146,7 +175,8 @@ async function writeIsolatedProducer<T>(params: {
 // Keep one descriptor and one exact identity through mode, sync, rename and cleanup.
 // Read/write access is needed only when the caller requests file synchronization.
 export async function writeCallbackSibling<T>(params: {
-  tempPath: string;
+  tempDir: string;
+  tempName: string;
   write: (tempPath: string) => Promise<T>;
   producerIsolation?: "private-directory";
   resolveFinalPath: (result: T) => string;
@@ -157,11 +187,8 @@ export async function writeCallbackSibling<T>(params: {
   syncTempFile: boolean;
   syncParentDir: boolean;
 }): Promise<{ filePath: string; result: T }> {
-  const tempPath = params.tempPath;
-  assertCallbackTempPathDeviceSafe(tempPath);
-  assertNoWindowsPathAlias(tempPath, "filesystem", "sibling temp path uses a Windows filesystem namespace alias");
-  const parent = path.dirname(tempPath);
-  assertNoWindowsPathAlias(parent, "filesystem", "sibling temp parent uses a Windows filesystem namespace alias");
+  const parent = resolveCallbackTempDirectory(params.tempDir);
+  const tempPath = resolveCallbackTempPath(parent, params.tempName);
   const write = params.write;
   const producerIsolation = params.producerIsolation;
   const resolveFinalPath = params.resolveFinalPath;

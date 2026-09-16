@@ -79,16 +79,21 @@ describe("caller-owned pathname snapshots", () => {
     await expect(fs.readFile(result.path, "utf8")).resolves.toBe("snapshot");
   });
 
-  itWin32("retains sibling temp path and final-path callback authority", async () => {
+  itWin32("retains sibling temp directory, name, and final-path callback authority", async () => {
     const root = await tempRoot("fs-safe-snapshot-sibling-");
     const safeTemp = path.join(root, "stage.tmp");
     const safeFinal = path.join(root, "final.bin");
+    let directoryReads = 0;
     let tempReads = 0;
     let resolverReads = 0;
     const params = {
-      get tempPath() {
+      get tempDir() {
+        directoryReads += 1;
+        return directoryReads === 1 ? root : `${root}::$INDEX_ALLOCATION`;
+      },
+      get tempName() {
         tempReads += 1;
-        return tempReads === 1 ? safeTemp : `${safeTemp}:hidden`;
+        return tempReads === 1 ? path.basename(safeTemp) : `${path.basename(safeTemp)}:hidden`;
       },
       write: async (candidate: string) => await fs.writeFile(candidate, "snapshot"),
       get resolveFinalPath() {
@@ -101,6 +106,7 @@ describe("caller-owned pathname snapshots", () => {
     };
 
     await expect(writeCallbackSibling(params)).resolves.toMatchObject({ filePath: safeFinal });
+    expect(directoryReads).toBe(1);
     expect(tempReads).toBe(1);
     expect(resolverReads).toBe(1);
     await expect(fs.readFile(safeFinal, "utf8")).resolves.toBe("snapshot");

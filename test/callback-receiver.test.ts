@@ -130,7 +130,7 @@ describe("snapshotted callback receivers", () => {
       const finalPath = path.join(rootDir, "final");
       let requestedTemp = tempPath;
       let requestedIsolation = producerIsolation;
-      const reads = { write: 0, producerIsolation: 0, resolveFinalPath: 0, tempPath: 0 };
+      const reads = { write: 0, producerIsolation: 0, resolveFinalPath: 0, tempDir: 0, tempName: 0 };
       const replacement = vi.fn(() => path.join(rootDir, "unused"));
       let resolver = function (this: unknown, value: string) {
         expect(this).toBe(params);
@@ -150,14 +150,15 @@ describe("snapshotted callback receivers", () => {
         write: { get() { reads.write++; return writer; } },
         producerIsolation: { get() { reads.producerIsolation++; return requestedIsolation; } },
         resolveFinalPath: { get() { reads.resolveFinalPath++; return resolver; } },
-        tempPath: { get() { reads.tempPath++; return requestedTemp; } },
+        tempDir: { get() { reads.tempDir++; return path.dirname(requestedTemp); } },
+        tempName: { get() { reads.tempName++; return path.basename(requestedTemp); } },
       })), { syncTempFile: false, syncParentDir: false });
       const pending = writeCallbackSibling(params);
       const replacementWriter = vi.fn(async () => "replacement");
       writer = replacementWriter;
       requestedIsolation = producerIsolation === undefined ? "private-directory" : undefined;
       await expect(pending).resolves.toEqual({ filePath: finalPath, result: "written" });
-      expect(reads).toEqual({ write: 1, producerIsolation: 1, resolveFinalPath: 1, tempPath: 1 });
+      expect(reads).toEqual({ write: 1, producerIsolation: 1, resolveFinalPath: 1, tempDir: 1, tempName: 1 });
       expect(replacementWriter).not.toHaveBeenCalled();
       expect(replacement).not.toHaveBeenCalled();
       expect(await fs.readFile(finalPath, "utf8")).toBe("content");
@@ -173,9 +174,11 @@ describe("snapshotted callback receivers", () => {
         dir,
         writeTemp: async function (this: unknown, pathname: string) {
           receiver = this;
-          expect(this).toHaveProperty("tempPath");
-          if (producerIsolation === undefined) expect(this).toMatchObject({ tempPath: pathname });
-          else expect(pathname).not.toBe((this as { tempPath: string }).tempPath);
+          expect(this).toMatchObject({ tempDir: dir, tempName: expect.any(String) });
+          const staging = this as { tempDir: string; tempName: string };
+          const requestedPath = path.join(staging.tempDir, staging.tempName);
+          if (producerIsolation === undefined) expect(pathname).toBe(requestedPath);
+          else expect(pathname).not.toBe(requestedPath);
           await fs.writeFile(pathname, "content");
           return "final";
         },
