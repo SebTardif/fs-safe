@@ -4,6 +4,7 @@
 
 ### Fixes
 
+- Retry Root-backed lock acquisition when an admitted single-link successor disappears during a stale-snapshot recovery probe, retaining root and parent identity checks.
 - Show only the moon icon in the docs light-theme picker and only the sun icon in dark mode.
 - Tolerate concurrent guest parent-directory creation only after descriptor-relative no-follow directory admission; file and symlink competitors remain rejected. Thanks @vincentkoc.
 - Close synchronous lock descriptors even when cleanup metadata inspection fails, preserving the original error and unverified sidecar.

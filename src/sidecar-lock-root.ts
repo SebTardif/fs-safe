@@ -52,11 +52,13 @@ export async function openSidecarRoot(
       (discardObservation === "changed" && observation.has(error, `changed:${resolved}`));
     if (!discardObservation || (!missing && (!completeParents || !discardable))) throw error;
     try {
+      const probe = fileObservation();
       try {
-        const current = await lockRoot.stat(relative);
+        const current = await probe.run(() => lockRoot.stat(relative));
         if (!current.isFile || current.isSymbolicLink || current.nlink !== 1) throw error;
       } catch (probeError) {
-        if (!(probeError instanceof FsSafeError && probeError.code === "not-found")) throw probeError;
+        if (!(probeError instanceof FsSafeError && probeError.code === "not-found") &&
+          !probe.has(probeError, `stat-leaf-missing:${expectedRealPath}`)) throw probeError;
       }
       for (const { dir, stat } of parents) await inspectDirectoryIdentity(dir, stat);
       await lockRoot.resolve(relative);

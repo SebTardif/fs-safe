@@ -2,7 +2,8 @@ import type { BigIntStats, Stats } from "node:fs";
 import fsSync from "node:fs";
 import path from "node:path";
 import { FsSafeError } from "./errors.js";
-import { isNotFoundPathError } from "./path.js";
+import { recordFileObservationFailure } from "./file-observation.js";
+import { hasNodeErrorCode, isNotFoundPathError } from "./path.js";
 import {
   assertRootDirectoryObservationGuard,
   assertRootPathObservationReceiptCurrent,
@@ -16,6 +17,28 @@ import { inspectFileIdentitySync } from "./strict-file-identity.js";
 import { assertStatObservationSync } from "./stat-observation.js";
 import { getFsSafeTestHooks } from "./test-hooks.js";
 import type { PathStat } from "./types.js";
+
+async function missingObservedFileError(
+  cause: unknown,
+  pathname: string,
+  before: Stats | BigIntStats | undefined,
+  assertParents: () => Promise<void> | void,
+): Promise<FsSafeError> {
+  const failure = new FsSafeError("path-mismatch", "file changed during operation", {
+    cause: cause instanceof Error ? cause : undefined,
+  });
+  if (hasNodeErrorCode(cause, "ENOENT") && before?.isFile() && !before.isSymbolicLink() &&
+    (before.nlink === 1 || before.nlink === 1n)) {
+    try {
+      await assertParents();
+      // Metadata loss permits discarding a probe, never reading or owning a file.
+      recordFileObservationFailure(failure, `stat-leaf-missing:${pathname}`);
+    } catch {
+      // Keep the public mismatch and withhold provenance when ancestry changed.
+    }
+  }
+  return failure;
+}
 
 export async function statResolvedPathInRoot(
   root: RootContext,
@@ -39,9 +62,10 @@ export async function statResolvedPathInRoot(
         );
       } catch (error) {
         if (isNotFoundPathError(error)) {
-          throw new FsSafeError("path-mismatch", "file changed during operation", {
-            cause: error instanceof Error ? error : undefined,
-          });
+          throw await missingObservedFileError(
+            error, resolvedPath, "stat" in receipt.target ? receipt.target.stat : undefined,
+            () => assertRootPathObservationReceiptCurrent(root, receipt),
+          );
         }
         throw error;
       }
@@ -80,9 +104,10 @@ export async function statResolvedPathInRoot(
       );
     } catch (error) {
       if (isNotFoundPathError(error)) {
-        throw new FsSafeError("path-mismatch", "file changed during operation", {
-          cause: error instanceof Error ? error : undefined,
-        });
+        throw await missingObservedFileError(
+          error, resolvedPath, expected,
+          () => assertRootDirectoryObservationGuard(root, parentGuard),
+        );
       }
       throw error;
     }
