@@ -62,6 +62,20 @@ change the mode policy of existing fallback-capable APIs.
 
 ## Native boundary
 
+The internal Darwin descriptor ACL inspector requires its matching native
+capability in both `auto` and `require`; `off`, a missing package, or an older
+binding without `inspectDarwinAcl` rejects with `helper-unavailable`. Inspection
+failure or malformed facts reject with `permission-unverified`; there is no
+mode-bit or pathname fallback for this capability. Clone admission uses a fused
+descriptor-bound metadata and ACL observation, then compares immutable receipts
+with fresh no-follow pathname identity fences; pathnames never authorize ACL
+state. The payload ACL-clear readback is part of that fused observation. Once
+a clone payload exists, normalization and verification failures become terminal
+`EIO` errors (with the underlying status and detail retained), not capability
+signals that permit an ordinary-copy retry. Checked cleanup cannot undo that
+terminal classification.
+This addition does not change other APIs' native-mode or permission contracts.
+
 The native layer exposes policy-free filesystem mechanisms: beneath-root
 open/mkdir/link, replace and no-replace rename, identity reads, archive decode/execution,
 clone/copy/hash workers, POSIX canonicalization, and Windows security descriptor calls. The TypeScript

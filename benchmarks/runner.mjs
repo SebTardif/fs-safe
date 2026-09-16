@@ -11,6 +11,7 @@ import { registerCore } from "./core.mjs";
 import { measuredSecureFileFeatures } from "./secure-file-contract.mjs";
 import { registerPaths } from "./paths.mjs";
 import { registerLifecycle } from "./lifecycle.mjs";
+import { registerDarwinClone } from "./darwin-clone.mjs";
 import { registerArchives } from "./archives.mjs";
 import { registerBroad } from "./broad.mjs";
 import { registerScaling } from "./scaling.mjs";
@@ -102,6 +103,7 @@ assert(!native || loadedAddon, "Could not identify the loaded native addon");
 const nativeHash = loadedAddon
   ? createHash("sha256").update(fs.readFileSync(loadedAddon.filename)).digest("hex") : null;
 const workspace = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "fs-safe-methods-")));
+const workspaceFilesystem = fs.statfsSync(workspace);
 const cases = [];
 const exclusions = new Map();
 const contracts = new Map();
@@ -131,6 +133,7 @@ try {
   cleanup = await registerCore(context);
   await registerPaths(context);
   await registerLifecycle(context);
+  await registerDarwinClone(context);
   await registerArchives(context);
   await registerBroad(context);
   await registerScaling(context);
@@ -218,8 +221,13 @@ try {
       }).trim(),
       node: process.version,
       platform: process.platform,
+      osRelease: os.release(),
       arch: process.arch,
       cpu: os.cpus()[0]?.model,
+      workspaceFilesystem: {
+        type: workspaceFilesystem.type,
+        blockSize: workspaceFilesystem.bsize,
+      },
       mode: args.mode,
       native,
       samples: args.samples,

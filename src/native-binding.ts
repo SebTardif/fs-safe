@@ -97,7 +97,13 @@ export interface NativeWindowsDescriptorSecurityFacts {
   security: NativeWindowsSecurityFacts;
 }
 
+export interface NativeDarwinAclFacts {
+  state: "absent" | "empty" | "present";
+}
+
 export interface NativeBinding {
+  /** Internal Darwin-only synchronous inspection; the caller retains its fd. */
+  inspectDarwinAcl?(fd: number): NativeDarwinAclFacts;
   /** POSIX system canonicalization; confinement and identity policy stay with callers. */
   canonicalizePath?(path: string, ordinary: boolean): { path?: string; errno?: number };
   /** Internal: exact directory identity and canonical path from one no-follow handle. */
