@@ -8,6 +8,7 @@
 
 ### Security
 
+- Fence low-level root-file opens with exact root and final-file identities, consistently admitting native Windows root spellings without weakening symlink or replacement rejection.
 - Fence Root reads against replacement of the captured root and final path, rejecting swapped trees before returning file contents or handles.
 - Make no-clobber Root moves atomic through native rename primitives and preserve identity-pinned isolated producer handoff, including legacy Windows delete-pending behavior.
 - Admit temporary-workspace roots and children before use, preserve existing permissions, and bind mode initialization and cleanup to retained directory identities.

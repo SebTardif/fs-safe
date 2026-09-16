@@ -108,10 +108,22 @@ export async function resolveRootPath(
   }
 }
 
+export async function resolveRootPathWithCanonicalRootObservation(
+  params: ResolveRootPathParams,
+  observeRoot: (rootCanonicalPath: string) => void,
+): Promise<ResolvedRootPath> {
+  try {
+    return await resolveRootPathInternal(params, undefined, undefined, observeRoot);
+  } catch (error) {
+    throw sanitizeRootPathError(error);
+  }
+}
+
 async function resolveRootPathInternal(
   params: ResolveRootPathParams,
   observationRequest?: RootPathObservationRequest,
   observationOutput?: { receipt?: RootPathObservationReceipt },
+  observeRoot?: (rootCanonicalPath: string) => void,
 ): Promise<ResolvedRootPath> {
   const input = captureValidRootPathInputs(params);
   const rawAbsolutePath = absolutePathWithRawSegments(input.absolutePath);
@@ -123,6 +135,7 @@ async function resolveRootPathInternal(
   assertNoWindowsPathAlias(rootPath);
   assertNoWindowsPathAlias(absolutePath);
   assertNoWindowsPathAlias(rootCanonicalPath);
+  observeRoot?.(rootCanonicalPath);
   return resolveRootPathLexicalAsync(
     prepareRootTraversal(input, rootPath, rootCanonicalPath, absolutePath, rawAbsolutePath),
     observationRequest,
@@ -151,7 +164,21 @@ export function resolveRootPathSync(params: ResolveRootPathParams): ResolvedRoot
   }
 }
 
-function resolveRootPathSyncInternal(params: ResolveRootPathParams): ResolvedRootPath {
+export function resolveRootPathSyncWithCanonicalRootObservation(
+  params: ResolveRootPathParams,
+  observeRoot: (rootCanonicalPath: string) => void,
+): ResolvedRootPath {
+  try {
+    return resolveRootPathSyncInternal(params, observeRoot);
+  } catch (error) {
+    throw sanitizeRootPathError(error);
+  }
+}
+
+function resolveRootPathSyncInternal(
+  params: ResolveRootPathParams,
+  observeRoot?: (rootCanonicalPath: string) => void,
+): ResolvedRootPath {
   const input = captureValidRootPathInputs(params);
   const rawAbsolutePath = absolutePathWithRawSegments(input.absolutePath);
   const rootPath = resolvePathPreservingWindowsRoot(input.rootPath);
@@ -162,6 +189,7 @@ function resolveRootPathSyncInternal(params: ResolveRootPathParams): ResolvedRoo
   assertNoWindowsPathAlias(rootPath);
   assertNoWindowsPathAlias(absolutePath);
   assertNoWindowsPathAlias(rootCanonicalPath);
+  observeRoot?.(rootCanonicalPath);
   return resolveRootPathLexicalSync(
     prepareRootTraversal(input, rootPath, rootCanonicalPath, absolutePath, rawAbsolutePath),
   );

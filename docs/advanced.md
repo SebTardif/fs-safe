@@ -95,6 +95,18 @@ drive before confinement and namespace admission. Additional colons remain in
 the anchored spelling, so alternate-stream and directory-index aliases are still
 rejected before opening.
 
+These adapters also capture the canonical root directory's exact bigint identity
+before component traversal. Immediately before transferring descriptor ownership,
+they check that root, freshly canonicalize the consumed pathname, admit the fresh
+spelling under the captured root, compare a no-follow canonical-leaf observation
+with the retained descriptor, and check the root again. Boundary or identity drift
+is a validation failure and the descriptor is closed. A custom `ioFs` supplies
+these observations; the built-in adapter uses fs-safe's native realpath wrapper.
+On Windows, the built-in adapter binds native root spelling before traversal,
+including supplied `rootRealPath`, and returns that spelling in its root receipt.
+This is an operation-local detection fence, not atomic confinement against a peer
+that can keep racing pathname bindings.
+
 The explicit `symlinks` policy takes precedence over the existing `rejectSymlinks`
 boolean. Without `symlinks`, `rejectSymlinks: false` retains its existing behavior
 of following contained links, and omission still rejects all symlink components.
