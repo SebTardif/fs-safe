@@ -1,9 +1,11 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { expectFsSafeError } from "./helpers/security.js";
+import { useSuiteFixture } from "./helpers/suite-fixture.js";
 import { itWin32, useTempDirs } from "./helpers/vitest.js";
 import { configureFsSafeNative } from "../src/native-config.js";
 import { acquireFileLock } from "../src/file-lock.js";
@@ -27,9 +29,16 @@ try {
 
 const { tempRoot } = useTempDirs();
 
-afterEach(() => {
+let contentionFixtureOwnsCleanup = false;
+
+function resetNativeTestState() {
   configureFsSafeNative({ mode: "auto" });
   __resetNativeLoaderForTest();
+}
+
+afterEach(() => {
+  // A timed-out contention test can still have native writes in flight.
+  if (!contentionFixtureOwnsCleanup) resetNativeTestState();
 });
 
 async function pinnedWriteRoot(
@@ -289,10 +298,24 @@ describe.runIf(native)("native filesystem primitives", () => {
     },
   );
 
-  it.each(["off", "require"] as const)(
-    "allows exactly one of many concurrent create-only writes in %s mode",
-    async (mode) => {
-      const directory = await pinnedWriteRoot(mode, "write-race");
+  describe.each(["off", "require"] as const)("concurrent create-only writes in %s mode", (mode) => {
+    let directory: string | undefined;
+    const run = useSuiteFixture(async () => {
+      contentionFixtureOwnsCleanup = true;
+      directory = await fs.mkdtemp(path.join(os.tmpdir(), `fs-safe-${mode}-write-race-`));
+      return directory;
+    }, async () => {
+      try {
+        if (directory) await fs.rm(directory, { recursive: true, force: true });
+      } finally {
+        contentionFixtureOwnsCleanup = false;
+        resetNativeTestState();
+      }
+    });
+
+    it("allows exactly one of many concurrent create-only writes", () => run(async (directory) => {
+      if (mode === "require") __setNativeLoaderForTest(() => native!);
+      configureFsSafeNative({ mode });
       const attempts = Array.from({ length: 32 }, (_, index) =>
         runPinnedWriteHelper({
           rootPath: directory,
@@ -311,8 +334,8 @@ describe.runIf(native)("native filesystem primitives", () => {
       expect(Number(await fs.readFile(path.join(directory, "winner"), "utf8"))).toSatisfy(
         (value: number) => Number.isInteger(value) && value >= 0 && value < attempts.length,
       );
-    },
-  );
+    }), 15_000);
+  });
 
   it("uses the native transaction for root-level pinned writes", async () => {
     __setNativeLoaderForTest(() => native!);
