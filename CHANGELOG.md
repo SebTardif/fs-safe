@@ -44,6 +44,7 @@
 
 ### Validation and tooling
 
+- Add guarded-mkdir regressions for exact descendant receipts, rounded inode collisions, and bounded Windows unknown-identity recovery across ordinary and symlink-resolved directory branches.
 - Version mutation-policy proof receipts to distinguish observed preservation from scoped JavaScript mkdir counters, and add bounded public-package pinned-policy rejection, state-selected write-refusal, and Windows buffer-write/placeholder-cleanup cases with explicit built test-hook provenance.
 - Separate the reviewed manual method-audit harness from immutable candidate and baseline checkouts, validate and resolve dispatch inputs before platform fan-out, and support Node 22/24 plus rebuild and same-artifact controls without changing the ordinary PR/schedule benchmark job.
 - Add versioned, mutation-checked benchmark provenance for trusted reviewed revisions, including harness/source identities, measurement and report-file receipts, manifests, lockfiles, dist trees, bounded dependency layouts, native addons, and runner metadata; this detects accidental drift but is not a sandbox for hostile benchmark code.
