@@ -376,7 +376,10 @@ mod tests {
     use std::io::{Seek, SeekFrom, Write};
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
+    use std::sync::atomic::AtomicU64;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     struct Fixture {
         path: PathBuf,
@@ -390,8 +393,11 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let path =
-                std::env::temp_dir().join(format!("fs-safe-copy-{}-{nonce}", std::process::id()));
+            let sequence = FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "fs-safe-copy-{}-{nonce}-{sequence}",
+                std::process::id()
+            ));
             fs::create_dir(&path).unwrap();
             fs::write(path.join("source"), b"copy source").unwrap();
             let source = OpenOptions::new()
