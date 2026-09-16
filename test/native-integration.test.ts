@@ -1,11 +1,10 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { expectFsSafeError } from "./helpers/security.js";
-import { useSuiteFixture } from "./helpers/suite-fixture.js";
+import { registerNativeCreateContentionTests } from "./helpers/native-create-contention.js";
 import { itWin32, useTempDirs } from "./helpers/vitest.js";
 import { configureFsSafeNative } from "../src/native-config.js";
 import { acquireFileLock } from "../src/file-lock.js";
@@ -298,44 +297,9 @@ describe.runIf(native)("native filesystem primitives", () => {
     },
   );
 
-  describe.each(["off", "require"] as const)("concurrent create-only writes in %s mode", (mode) => {
-    let directory: string | undefined;
-    const run = useSuiteFixture(async () => {
-      contentionFixtureOwnsCleanup = true;
-      directory = await fs.mkdtemp(path.join(os.tmpdir(), `fs-safe-${mode}-write-race-`));
-      return directory;
-    }, async () => {
-      try {
-        if (directory) await fs.rm(directory, { recursive: true, force: true });
-      } finally {
-        contentionFixtureOwnsCleanup = false;
-        resetNativeTestState();
-      }
-    });
-
-    it("allows exactly one of many concurrent create-only writes", () => run(async (directory) => {
-      if (mode === "require") __setNativeLoaderForTest(() => native!);
-      configureFsSafeNative({ mode });
-      const attempts = Array.from({ length: 32 }, (_, index) =>
-        runPinnedWriteHelper({
-          rootPath: directory,
-          relativeParentPath: "",
-          basename: "winner",
-          mkdir: false,
-          mode: 0o600,
-          overwrite: false,
-          input: { kind: "buffer", data: String(index) },
-        }),
-      );
-
-      const results = await Promise.allSettled(attempts);
-      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-      expect(results.filter((result) => result.status === "rejected")).toHaveLength(31);
-      expect(Number(await fs.readFile(path.join(directory, "winner"), "utf8"))).toSatisfy(
-        (value: number) => Number.isInteger(value) && value >= 0 && value < attempts.length,
-      );
-    }), 15_000);
-  });
+  registerNativeCreateContentionTests(native!, (owned) => {
+    contentionFixtureOwnsCleanup = owned;
+  }, resetNativeTestState);
 
   it("uses the native transaction for root-level pinned writes", async () => {
     __setNativeLoaderForTest(() => native!);
