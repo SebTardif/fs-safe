@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { registerTempWorkspaceCoverage } from "./temp-workspace-fixtures.mjs";
 import { registerSecureTempRootCoverage } from "./secure-temp-root-fixtures.mjs";
+import { registerSidecarPathSnapshot } from "./sidecar-path-snapshot.mjs";
 
 export async function registerLifecycle({ api: a, workspace: w, native, binding, register: add, contract, onCleanup, args }) {
   const cloneBackend = a.probeTreeClone(w);
@@ -229,6 +230,7 @@ export async function registerLifecycle({ api: a, workspace: w, native, binding,
   contract("FileLockHeldEntry", heldEntry);
   await held.release();
   add("FileLockHeldEntry.forceRelease", (entry) => entry.forceRelease(), { before: async () => { await manager.acquire(lockPath, lockOptions); return manager.heldEntries()[0]; }, after: () => manager.drain() });
+  registerSidecarPathSnapshot({ api: a, workspace: w, register: add, onCleanup });
   const queueDir = path.join(w, "queue");
   const failedDir = path.join(w, "failed");
   await a.ensureJsonDurableQueueDirs({ queueDir, failedDir });

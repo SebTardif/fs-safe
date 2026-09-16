@@ -4,6 +4,10 @@ import {
   validateFilenameFallbackProfile,
 } from "./filename-fallback-profile.mjs";
 import { validateTempWorkspaceWorkloadResult } from "./temp-workspace-fixtures.mjs";
+import {
+  validateSidecarPathSnapshotReport,
+  validateSidecarPathSnapshotWorkloadResult,
+} from "./sidecar-path-snapshot.mjs";
 
 const SHA1 = /^[0-9a-f]{40}$/u;
 const SHA256 = /^[0-9a-f]{64}$/u;
@@ -84,6 +88,30 @@ export function measuredDistributionMetadata(binding, observedProfile, distHash)
   };
 }
 
+export function validateMeasuredResult(result, expectedSamples, context = "benchmark result") {
+  assert(result && typeof result === "object", `${context} is missing`);
+  assert.equal(typeof result.name, "string", `${context} name is invalid`);
+  assert(result.name.length > 0, `${context} name is empty`);
+  if (result.skipped !== undefined) {
+    assert.equal(typeof result.skipped, "string", `${context} skip reason is invalid`);
+    assert(result.skipped.length > 0, `${context} skip reason is empty`);
+    return;
+  }
+
+  assert(Number.isSafeInteger(result.iterations) && result.iterations > 0,
+    `${context} iterations are invalid`);
+  assert(Array.isArray(result.samplesUs) && result.samplesUs.length === expectedSamples,
+    `${context} sample set is incomplete`);
+  assert(result.samplesUs.every((sample) => Number.isFinite(sample) && sample >= 0),
+    `${context} sample set contains an invalid duration`);
+  const sorted = [...result.samplesUs].sort((a, b) => a - b);
+  const median = (sorted[Math.floor((sorted.length - 1) / 2)] +
+    sorted[Math.floor(sorted.length / 2)]) / 2;
+  assert.equal(result.minUs, sorted[0], `${context} minimum does not match its samples`);
+  assert.equal(result.maxUs, sorted.at(-1), `${context} maximum does not match its samples`);
+  assert.equal(result.medianUs, median, `${context} median does not match its samples`);
+}
+
 export function validateMeasuredDistribution(plan, reportPlan, report, expectedDistHash) {
   const expected = measuredSourceBinding(plan, reportPlan);
   const actual = report.metadata?.measuredDistribution;
@@ -100,13 +128,23 @@ export function validateMeasuredDistribution(plan, reportPlan, report, expectedD
     expected.expectedFilenameFallbackProfile,
     `${reportPlan.file} filename fallback profile mismatch`,
   );
-  for (const result of report.results ?? []) {
+  const results = report.results ?? [];
+  const names = results.map(({ name }) => name);
+  assert.equal(new Set(names).size, names.length, `${reportPlan.file} contains duplicate result names`);
+  for (const result of results) {
+    validateMeasuredResult(result, plan.settings.samples, `${reportPlan.file} result ${result.name ?? "<unnamed>"}`);
+    if (plan.settings.filter) {
+      assert(result.name.includes(plan.settings.filter),
+        `${reportPlan.file} contains a result outside its filter: ${result.name}`);
+    }
     const semantics = expectedWorkloadSemantics(result.name);
     if (semantics !== undefined) {
       assert.equal(result.workloadSemantics, semantics, `${reportPlan.file} workload semantics mismatch for ${result.name}`);
     }
     validateTempWorkspaceWorkloadResult(result);
+    validateSidecarPathSnapshotWorkloadResult(result);
   }
+  validateSidecarPathSnapshotReport(report, plan.settings.filter, plan.settings.iterations);
 }
 
 export const MEASURED_SOURCE_ARGUMENT_NAMES = Object.freeze(

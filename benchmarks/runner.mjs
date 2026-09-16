@@ -24,6 +24,7 @@ import {
   measuredDistributionMetadata,
   parseMeasuredSourceArguments,
 } from "./measured-distribution.mjs";
+import { finalizeBenchmarkRun, finishBenchmarkInvocation } from "./runner-cleanup.mjs";
 
 const args = { iterations: 100, samples: 5, warmup: 5, mode: "off", "copy-shape": "mixed", "copy-files": 64, "copy-file-bytes": 4096 };
 for (let i = 2; i < process.argv.length; i++) {
@@ -129,6 +130,9 @@ const context = {
   register, exclude, contract, args, onCleanup: (fn) => cleanups.push(fn),
 };
 let cleanup;
+let completedReport;
+let completionMessage;
+const executionFailures = [];
 try {
   cleanup = await registerCore(context);
   await registerPaths(context);
@@ -152,6 +156,7 @@ try {
         skipped: c.skip,
         workloadSemantics: c.workloadSemantics,
         workloadDetails: c.workloadDetails,
+        fixturePlacement: c.fixturePlacement,
       });
       continue;
     }
@@ -160,6 +165,8 @@ try {
     const once = async (timed) => {
       const input = await c.before?.();
       let output;
+      let elapsed;
+      const invocationFailures = [];
       try {
         const start = performance.now();
         let rejected = false;
@@ -170,11 +177,18 @@ try {
           output = error;
           rejected = true;
         }
-        const elapsed = performance.now() - start;
+        elapsed = performance.now() - start;
         if (c.expectError && !rejected) throw new Error(`${c.name} unexpectedly succeeded`);
         if (!timed) c.verify?.(output);
-        return elapsed;
-      } finally { await c.after?.(output, input); }
+      } catch (error) {
+        invocationFailures.push(error);
+      }
+      await finishBenchmarkInvocation(
+        invocationFailures,
+        () => c.after?.(output, input),
+        `${c.name} invocation and cleanup failed`,
+      );
+      return elapsed;
     };
     const samplesUs = [];
     for (let i = 0; i < args.warmup; i++) await once(false);
@@ -202,11 +216,12 @@ try {
       maxUs: sorted.at(-1),
       workloadSemantics: c.workloadSemantics,
       workloadDetails: c.workloadDetails,
+      fixturePlacement: c.fixturePlacement,
     };
     results.push(result);
     process.stderr.write(`${c.name}: ${medianUs.toFixed(2)} us/call\n`);
   }
-  const report = {
+  completedReport = {
     schemaVersion: 1,
     copyFixture: { shape: args["copy-shape"], files: args["copy-shape"] === "empty" ? 0 : args["copy-files"], bytesPerFile: args["copy-file-bytes"], extraPayloadBytes: args["copy-shape"] === "mixed" ? 1024 * 1024 : 0, concurrency: args["copy-concurrency"] ?? null },
     metadata: {
@@ -236,10 +251,10 @@ try {
     coverage: { exports: Object.fromEntries(exportsByName), methods: Object.fromEntries(contracts), exclusions: Object.fromEntries(exclusions), registeredCases: cases.length, filtered: Boolean(args.filter) },
     results,
   };
-  if (args.json) fs.writeFileSync(path.resolve(args.json), `${JSON.stringify(report, null, 2)}\n`);
-  process.stdout.write(`Measured ${results.filter((r) => !r.skipped).length} cases; ${required.length} callable exports/methods accounted for. Native ${args.mode}: ${native ? "loaded" : "off/unavailable"}.\n`);
-} finally {
-  await cleanup?.();
-  for (const fn of cleanups.reverse()) await fn();
-  fs.rmSync(workspace, { recursive: true, force: true });
+  completionMessage = `Measured ${results.filter((r) => !r.skipped).length} cases; ${required.length} callable exports/methods accounted for. Native ${args.mode}: ${native ? "loaded" : "off/unavailable"}.\n`;
+} catch (error) {
+  executionFailures.push(error);
 }
+await finalizeBenchmarkRun({ initialFailures: executionFailures, cleanup, cleanups, workspace });
+if (args.json) fs.writeFileSync(path.resolve(args.json), `${JSON.stringify(completedReport, null, 2)}\n`);
+process.stdout.write(completionMessage);

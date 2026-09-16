@@ -30,7 +30,11 @@ Expensive archive, durable-store, and large-payload cases use fewer iterations, 
 Inputs are synthetic. Fixture setup and cleanup run outside the timer; callback
 work and cleanup performed *by the method* remain inside it. The Windows
 workspace receives a private ACL before fixture creation so its files inherit
-private permissions; Unix mode bits alone do not restrict them. Open and acquire
+private permissions. When that workspace and the runner cwd are on different
+drives, only the sidecar-path fixture moves to a private, uniquely named cwd
+child so its relative, rooted, and drive-relative rows remain genuine; reports
+record the placement class without exposing the host path. Unix mode bits alone
+do not restrict fixtures. Open and acquire
 cases exclude later close/release, which have their own rows. Representative
 payload assertions run outside measurement. Reads cover 128 B, 64 KiB, 1 MiB,
 2 MiB, the default Root budget of 16 MiB, and an explicit 32 MiB budget;
@@ -291,4 +295,6 @@ directory. `--copy-files` defaults to 64, and `--copy-file-bytes` defaults to
 4096. Generated file data is bounded to 512 MiB plus the mixed payload. Each
 worker count runs auto, never, and supported always policies; explicit workers
 are included in row names. Contents and directory listings are checked outside
-timing. On Windows, `TEMP`/`TMP` select the fixture volume; on POSIX use `TMPDIR`.
+timing. On Windows, `TEMP`/`TMP` select the ordinary fixture volume; the
+sidecar-path exception above uses the cwd drive only when relative path semantics
+require it. On POSIX use `TMPDIR`.

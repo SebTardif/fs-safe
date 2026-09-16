@@ -144,6 +144,20 @@ export async function consumerInstallSmoke({ rootPkg, manifest, outputDir, npmCl
         writeFileSync(join(directory, "expected.json"), JSON.stringify({
           rootPkg, host, omitted, platforms: nativeTargets.map((target) => target.package),
           entryHash: createHash("sha256").update(readFileSync("dist/index.js")).digest("hex"),
+          sidecarModuleHashes: Object.fromEntries([
+            "config.js", "file-lock.js", "native-config.js", "root.js", "root-impl.js",
+            "sidecar-lock.js", "sidecar-lock-acquire.js", "sidecar-lock-handle.js",
+            "sidecar-lock-reclaim.js",
+          ].map((name) => [
+            name,
+            createHash("sha256").update(readFileSync(join("dist", name))).digest("hex"),
+          ])),
+          sidecarProbeHash: createHash("sha256")
+            .update(readFileSync(new URL("./consumer-sidecar-snapshot-probe.mjs", import.meta.url)))
+            .digest("hex"),
+          metadataHelperHash: createHash("sha256")
+            .update(readFileSync(new URL("./consumer-proof-metadata.mjs", import.meta.url)))
+            .digest("hex"),
         }));
         writeFileSync(join(directory, "probe.mjs"), readFileSync(new URL("./consumer-install-probe.mjs", import.meta.url)));
         await run([process.execPath, join(directory, "probe.mjs")], [], directory, env);
@@ -158,11 +172,15 @@ export async function consumerInstallSmoke({ rootPkg, manifest, outputDir, npmCl
         cases.off = await hash("off");
         if (!omitted) {
           const secretProbe = join(directory, "secret-probe.mjs");
+          const sidecarProbe = join(directory, "sidecar-snapshot-probe.mjs");
           writeFileSync(secretProbe, readFileSync(new URL("./consumer-secret-probe.mjs", import.meta.url)));
+          writeFileSync(sidecarProbe, readFileSync(new URL("./consumer-sidecar-snapshot-probe.mjs", import.meta.url)));
           writeFileSync(join(directory, "consumer-proof-metadata.mjs"), readFileSync(new URL("./consumer-proof-metadata.mjs", import.meta.url)));
           cases.secretDirectories = [];
+          cases.sidecarSnapshots = [];
           for (const mode of ["off", "require"]) {
             cases.secretDirectories.push(JSON.parse(await run([process.execPath, secretProbe], [mode], directory, env)));
+            cases.sidecarSnapshots.push(JSON.parse(await run([process.execPath, sidecarProbe], [mode], directory, env)));
           }
           renameSync(installed.binary, `${installed.binary}.removed`);
           cases.missingBinaryAuto = await hash("auto");

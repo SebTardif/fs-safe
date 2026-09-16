@@ -4,6 +4,7 @@
 
 ### Fixes
 
+- Pin asynchronous relative sidecar-lock paths and roots to their entry-time working directory through acquisition, reclaim, verification, and release.
 - Apply Windows buffered-write compatibility locking and content verification, retaining the accepted destination descriptor through mode changes, sync, and final verification.
 - Report actionable errno diagnostics from guarded write preparation while preserving error codes, categories, original causes, and already-classified failures.
 

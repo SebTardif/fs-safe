@@ -16,6 +16,7 @@ import {
   measuredSourceBinding,
   parseMeasuredSourceArguments,
 } from "../benchmarks/measured-distribution.mjs";
+import { completeSyntheticBenchmarkResults } from "./helpers/benchmark-report.js";
 
 const H = "1".repeat(40);
 const C = "2".repeat(40);
@@ -178,7 +179,7 @@ function rawReport(plan: ReturnType<typeof planFor>, reportPlan = plan.reports[0
       native: false,
       samples: 5,
     },
-    results: [{ name: "root", medianUs: 1 }],
+    results: completeSyntheticBenchmarkResults(plan.settings.samples, plan.settings.iterations),
   };
 }
 
@@ -407,7 +408,9 @@ describe("method-audit provenance validation", () => {
     const wrongSemantics = structuredClone(reports);
     wrongSemantics.get(plan.reports[0].file)!.results = [{
       name: "sanitizeUntrustedFileName/matrix/fallback-path",
-      medianUs: 1,
+      iterations: 1,
+      samplesUs: [1, 1, 1, 1, 1],
+      minUs: 1, medianUs: 1, maxUs: 1,
       workloadSemantics: "equivalent-output",
     }];
     expect(() => validateCompleteReportSet(plan, wrongSemantics, before, before))

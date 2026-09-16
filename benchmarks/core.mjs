@@ -1,21 +1,16 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { secureFileBenchmarkCase } from "./secure-file-contract.mjs";
+import { applyBenchmarkPrivateWindowsAcl } from "./windows-private-directory.mjs";
 
 export async function registerCore({ api: a, workspace: w, binding, measuredFeatures, register: add, contract, onCleanup }) {
   const data = Buffer.from(' {"ok":true,"label":"synthetic benchmark"}\n');
   const input = path.join(w, "input.json");
-  if (process.platform === "win32") {
-    const acl = a.createIcaclsResetCommand(w, { isDir: true });
-    assert(acl, "Cannot resolve the benchmark workspace's Windows principal");
-    const result = spawnSync(acl.command, acl.args, { windowsHide: true, timeout: 30_000, stdio: "ignore" });
-    assert.equal(result.status, 0, "Cannot set the benchmark workspace's private Windows ACL");
-  }
+  applyBenchmarkPrivateWindowsAcl(a, w);
   fs.writeFileSync(input, data, { mode: 0o600 });
   fs.mkdirSync(path.join(w, "tree", "nested"), { recursive: true });
   for (let i = 0; i < 100; i++) fs.writeFileSync(path.join(w, "tree", `entry-${i}`), data);
