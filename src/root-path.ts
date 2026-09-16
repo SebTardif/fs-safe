@@ -1,6 +1,7 @@
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
-import { formatErrorDetail, shortPath } from "./error-detail.js";
+import { shortPath } from "./error-detail.js";
+import { pathEscapeError, sanitizeRootPathError, symlinkEscapeError } from "./root-path-errors.js";
 import { FsSafeError } from "./errors.js";
 import { isNativeDirectoryObservationGuard } from "./native-directory-observation.js";
 import {
@@ -31,6 +32,7 @@ import {
 } from "./root-path-observation.js";
 import { resolveSymlinkHopPath, resolveSymlinkHopPathSync } from "./root-path-symlink.js";
 import { assertNoDriveRelativePathSegments } from "./safe-path-segment.js";
+import type { RemovalPathReceipts } from "./root-remove-receipt.js";
 import {
   assertNoWindowsPathAlias,
   pathForWindowsFilesystem,
@@ -124,6 +126,7 @@ async function resolveRootPathInternal(
   observationRequest?: RootPathObservationRequest,
   observationOutput?: { receipt?: RootPathObservationReceipt },
   observeRoot?: (rootCanonicalPath: string) => void,
+  removalReceipts?: RemovalPathReceipts,
 ): Promise<ResolvedRootPath> {
   const input = captureValidRootPathInputs(params);
   const rawAbsolutePath = absolutePathWithRawSegments(input.absolutePath);
@@ -140,6 +143,7 @@ async function resolveRootPathInternal(
     prepareRootTraversal(input, rootPath, rootCanonicalPath, absolutePath, rawAbsolutePath),
     observationRequest,
     observationOutput,
+    removalReceipts,
   );
 }
 
@@ -151,6 +155,19 @@ export async function resolveRootPathWithObservation(
   try {
     const resolved = await resolveRootPathInternal(params, request, output);
     return output.receipt ? { resolved, receipt: output.receipt } : { resolved };
+  } catch (error) {
+    throw sanitizeRootPathError(error);
+  }
+}
+
+// Removal receipts are separate from metadata observations and canonical-root
+// callbacks; the public resolver's options and result remain unchanged.
+export async function resolveRootPathForRemoval(
+  params: ResolveRootPathParams,
+  receipts: RemovalPathReceipts,
+): Promise<ResolvedRootPath> {
+  try {
+    return await resolveRootPathInternal(params, undefined, undefined, undefined, receipts);
   } catch (error) {
     throw sanitizeRootPathError(error);
   }
@@ -229,13 +246,6 @@ function prepareRootTraversal(
     absolutePath: trustedAbsolutePath ? resolvePathPreservingWindowsRoot(raw) : absolutePath,
     observationEligible: raw === rawAbsolutePath && !trustedAbsolutePath,
   };
-}
-
-function sanitizeRootPathError(error: unknown): unknown {
-  if (error instanceof Error) {
-    error.message = formatErrorDetail(error.message);
-  }
-  return error;
 }
 
 function captureValidRootPathInputs(params: ResolveRootPathParams): ResolveRootPathParams {
@@ -538,6 +548,7 @@ async function resolveRootPathLexicalAsync(
   params: LexicalResolutionParams,
   observationRequest?: RootPathObservationRequest,
   observationOutput?: { receipt?: RootPathObservationReceipt },
+  removalReceipts?: RemovalPathReceipts,
 ): Promise<ResolvedRootPath> {
   const context = createLexicalTraversalContext(params);
   const { state } = context;
@@ -560,15 +571,23 @@ async function resolveRootPathLexicalAsync(
     let stat: fs.Stats | BigIntStats | undefined;
     let observed: ReturnType<typeof inspectRootPathTraversalEntry> | undefined;
     try {
-      const directorySlot = observation?.enabled === true && idx === observation.directoryIndex;
-      const targetSlot = observation?.enabled === true && idx === observation.targetIndex;
-      const observeExactly = directorySlot || targetSlot;
-      if (observeExactly) {
-        observed = inspectRootPathTraversalEntry(state.lexicalCursor, directorySlot, observation!);
+      if (removalReceipts && !isLast) {
+        const directoryStat = fs.lstatSync(pathForWindowsFilesystem(state.lexicalCursor), { bigint: true });
+        if (directoryStat.isDirectory() && !directoryStat.isSymbolicLink()) {
+          removalReceipts.observeDirectory(state.lexicalCursor, directoryStat);
+        }
+        stat = directoryStat;
+      } else {
+        const directorySlot = observation?.enabled === true && idx === observation.directoryIndex;
+        const targetSlot = observation?.enabled === true && idx === observation.targetIndex;
+        const observeExactly = directorySlot || targetSlot;
+        if (observeExactly) {
+          observed = inspectRootPathTraversalEntry(state.lexicalCursor, directorySlot, observation!);
+        }
+        stat = isNativeDirectoryObservationGuard(observed)
+          ? undefined
+          : observed?.stat ?? fs.lstatSync(state.lexicalCursor);
       }
-      stat = isNativeDirectoryObservationGuard(observed)
-        ? undefined
-        : observed?.stat ?? fs.lstatSync(state.lexicalCursor);
     } catch (error) {
       if (observation?.enabled && observation.request.kind === "stat" &&
         idx === observation.targetIndex && observation.directoryGuard) {
@@ -834,22 +853,3 @@ function assertInsideBoundary(params: {
   );
 }
 
-function pathEscapeError(params: {
-  boundaryLabel: string;
-  rootPath: string;
-  absolutePath: string;
-}): Error {
-  return new Error(
-    `Path escapes ${params.boundaryLabel} (${shortPath(params.rootPath)}): ${shortPath(params.absolutePath)}`,
-  );
-}
-
-function symlinkEscapeError(params: {
-  boundaryLabel: string;
-  rootCanonicalPath: string;
-  symlinkPath: string;
-}): Error {
-  return new Error(
-    `Symlink escapes ${params.boundaryLabel} (${shortPath(params.rootCanonicalPath)}): ${shortPath(params.symlinkPath)}`,
-  );
-}

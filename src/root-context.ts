@@ -156,11 +156,15 @@ export function rootRelativeReadPath(root: RootContext, filePath: string): strin
   return raw;
 }
 
-export function assertRootIdentityCurrentSync(root: RootContext): void {
+export function assertRootIdentityCurrentSync(
+  root: RootContext,
+  observe?: (stat: fs.BigIntStats) => void,
+): void {
   let current: fs.Stats;
   try {
     if (typeof root.rootIdentity.dev === "bigint" && typeof root.rootIdentity.ino === "bigint") {
-      inspectDirectoryIdentitySync(root.rootReal, { dev: root.rootIdentity.dev, ino: root.rootIdentity.ino });
+      const stat = inspectDirectoryIdentitySync(root.rootReal, { dev: root.rootIdentity.dev, ino: root.rootIdentity.ino });
+      observe?.(stat);
       return;
     }
     current = fs.lstatSync(root.rootReal);
@@ -176,8 +180,11 @@ export function assertRootIdentityCurrentSync(root: RootContext): void {
   }
 }
 
-export async function assertRootIdentityCurrent(root: RootContext): Promise<void> {
-  assertRootIdentityCurrentSync(root);
+export async function assertRootIdentityCurrent(
+  root: RootContext,
+  observe?: (stat: fs.BigIntStats) => void,
+): Promise<void> {
+  assertRootIdentityCurrentSync(root, observe);
 }
 
 /**

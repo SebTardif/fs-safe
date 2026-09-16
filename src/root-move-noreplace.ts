@@ -11,7 +11,9 @@ import {
 } from "./native-parent-admission.js";
 import { getNativeBinding } from "./native.js";
 import { isNotFoundPathError } from "./path.js";
-import { assertRootIdentityCurrent, type RootContext } from "./root-context.js";
+import { assertRootIdentityCurrent, assertRootIdentityCurrentSync, type RootContext } from "./root-context.js";
+import { resolveRootPathSync } from "./root-path.js";
+import { admitPathInsideRoot } from "./root-boundary.js";
 import {
   fileNotFoundError,
   hardlinkedPathNotAllowedError,
@@ -34,6 +36,16 @@ function nativeParentRelativePath(rootReal: string, parentPath: string): string 
     throw outsideWorkspaceError();
   }
   return relative.split(path.sep).join(path.posix.sep);
+}
+
+function admitMovePath(root: RootContext, parent: NativeParentAdmission, basename: string): string {
+  const admitted = admitPathInsideRoot({
+    rootPath: root.rootReal,
+    candidatePath: path.join(parent.guard.realPath, basename),
+    rootIdentity: root.rootIdentity,
+  });
+  if (!admitted) throw outsideWorkspaceError();
+  return admitted.path;
 }
 
 function nativePrimitiveUnavailable(error: unknown): boolean {
@@ -112,8 +124,8 @@ export async function movePathNoReplaceNative(
       ? [sourceParent]
       : [sourceParent, targetParent];
     await getFsSafeTestHooks()?.beforeRootFallbackMutation?.("move", paths.targetPath);
-    const admittedSourcePath = path.join(sourceParent.guard.realPath, path.basename(paths.sourcePath));
-    const admittedTargetPath = path.join(targetParent.guard.realPath, path.basename(paths.targetPath));
+    const admittedSourcePath = admitMovePath(root, sourceParent, path.basename(paths.sourcePath));
+    const admittedTargetPath = admitMovePath(root, targetParent, path.basename(paths.targetPath));
     if (params.denyMutations) {
       // Native admission can follow a newly introduced contained parent alias.
       // Authorize the selected names, then recheck every retained directory.
@@ -139,6 +151,26 @@ export async function movePathNoReplaceNative(
     }
     assertFinalSymlinkRejected(admittedTargetPath, params.mutationSymlinks !== undefined);
     params.assertBeforeMutation?.();
+    if (params.assertBeforeMutation || params.mutationSymlinks === "reject") {
+      // Do not carry directory freshness across the live authority callback.
+      assertRootIdentityCurrentSync(root);
+      if (params.mutationSymlinks === "reject") {
+        // Validate both full pre-native routes; selected canonical names have
+        // already erased any parent symlink followed during admission.
+        for (const absolutePath of [paths.sourcePath, paths.targetPath]) {
+          resolveRootPathSync({
+            absolutePath,
+            rootPath: root.rootReal,
+            rootCanonicalPath: root.rootReal,
+            rootIdentity: root.rootIdentity,
+            boundaryLabel: "root",
+            rejectSymlinks: true,
+            rejectFinalSymlink: true,
+          });
+        }
+      }
+      for (const admission of parentAdmissions) assertSyncDirectoryGuard(admission.guard);
+    }
     try {
       binding.renameNoReplace(
         sourceParent.fd,

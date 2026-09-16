@@ -8,6 +8,7 @@
 
 ### Security
 
+- Bind nonrecursive removal to admitted parent receipts, and revalidate native move endpoint containment and explicit parent-symlink rejection before dispatch.
 - Repair synchronous store-directory permissions through no-follow descriptors and current exact identities, rechecking mode changes during the matching-mode fast path.
 - Fence low-level root-file opens with exact root and final-file identities, consistently admitting native Windows root spellings without weakening symlink or replacement rejection.
 - Fence Root reads against replacement of the captured root and final path, rejecting swapped trees before returning file contents or handles.

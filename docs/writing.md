@@ -277,6 +277,12 @@ replacing rename. After dispatch it rechecks both parent identities, so a
 post-operation rejection can mean the no-replace rename completed. Directory
 moves continue to require `overwrite: true`.
 
+Both selected canonical endpoints are admitted inside the retained Root after
+native parent admission. With `mutationSymlinks: "reject"`, both full operation
+paths are rechecked after the live mutation-authority callback and before
+dispatch. The Root and retained parents are fenced again after any such callback.
+These checks retain the documented final check-to-syscall race.
+
 For `{ overwrite: true }`, the JavaScript path checks both parent directories
 before and after the rename. A failed post-operation check rejects even though
 the rename may already have completed; rejection does not imply rollback.
@@ -285,8 +291,12 @@ the rename may already have completed; rejection does not imply rollback.
 
 Unlink a file or `rmdir` an empty directory. Non-empty directories throw `not-empty`. For atomic directory replacement, use [`replaceDirectoryAtomic`](atomic.md#replacedirectoryatomic).
 
-The JavaScript fallback reports failed parent-directory checks after removal.
-The entry may already have been removed when this verification rejects.
+Before a nonrecursive JavaScript fallback removal, fs-safe retains exact
+Root-to-parent directory identities, with canonical endpoint checks at Root and
+the immediate parent. It rejects a parent redirected through a symlink or
+junction before `unlink` or `rmdir`, even with `force: true`, and rechecks the
+retained ancestry after the operation settles. The entry may already have been
+removed when that final verification rejects.
 
 ```ts
 await fs.remove("logs/yesterday.log");

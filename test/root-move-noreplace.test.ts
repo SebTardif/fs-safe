@@ -349,3 +349,57 @@ it.skipIf(process.platform === "win32").each(["source", "target"] as const)(
     await expect(fs.lstat(path.join(directory, "published"))).rejects.toMatchObject({ code: "ENOENT" });
   },
 );
+
+
+it.skipIf(process.platform === "win32").each(
+  (["source", "target"] as const).flatMap(boundary => [false, true].flatMap(nested =>
+    ([undefined, "reject", "follow-parents-within-root"] as const).map(policy => ({ boundary, nested, policy })))),
+)("honors $policy for a late $boundary parent alias (nested=$nested)", async ({ boundary, nested, policy }) => {
+  const directory = await tempRoot("fs-safe-root-move-late-parent-policy-");
+  const allowed = path.join(directory, "allowed");
+  const alternate = path.join(directory, "alternate");
+  const incoming = path.join(directory, "incoming");
+  const suffix = nested ? "deep" : "";
+  const originalSource = path.join(allowed, suffix, "source");
+  const alternateSource = path.join(alternate, suffix, "source");
+  const alternateTarget = path.join(alternate, suffix, "published");
+  await Promise.all([
+    fs.mkdir(path.dirname(originalSource), { recursive: true }),
+    fs.mkdir(path.dirname(alternateSource), { recursive: true }),
+    fs.mkdir(incoming),
+  ]);
+  await fs.writeFile(originalSource, "original source");
+  await fs.writeFile(alternateSource, "alternate source");
+  await fs.writeFile(path.join(incoming, "source"), "incoming source");
+  let redirected = false;
+  const adapter = noReplaceAdapter(directory, undefined, relativePath => {
+    if (redirected || (relativePath !== "allowed" && relativePath !== "allowed/deep")) return;
+    fsSync.renameSync(allowed, path.join(directory, "parked-allowed"));
+    fsSync.symlinkSync("alternate", allowed, "dir");
+    redirected = true;
+  });
+  __setNativeLoaderForTest(() => adapter.binding);
+  configureFsSafeNative({ mode: "require" });
+  const scoped = await root(directory);
+  const relativeParent = nested ? "allowed/deep" : "allowed";
+  const pending = scoped.move(
+    boundary === "source" ? `${relativeParent}/source` : "incoming/source",
+    boundary === "source" ? "published" : `${relativeParent}/published`,
+    { mutationSymlinks: policy },
+  );
+  if (policy === "reject") {
+    await expect(pending).rejects.toMatchObject({ code: "symlink" });
+    expect(adapter.renameNoReplace).not.toHaveBeenCalled();
+    expect(await fs.readFile(alternateSource, "utf8")).toBe("alternate source");
+    expect(await fs.readFile(path.join(incoming, "source"), "utf8")).toBe("incoming source");
+    await expect(fs.lstat(alternateTarget)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.lstat(path.join(directory, "published"))).rejects.toMatchObject({ code: "ENOENT" });
+  } else {
+    await pending;
+    expect(adapter.renameNoReplace).toHaveBeenCalledOnce();
+    const published = boundary === "source" ? path.join(directory, "published") : alternateTarget;
+    expect(await fs.readFile(published, "utf8")).toBe(boundary === "source" ? "alternate source" : "incoming source");
+  }
+  expect(redirected).toBe(true);
+  expect(await fs.readFile(path.join(directory, "parked-allowed", suffix, "source"), "utf8")).toBe("original source");
+});

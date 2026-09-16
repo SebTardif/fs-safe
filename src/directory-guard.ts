@@ -62,13 +62,13 @@ export function assertDirectoryIdentitySync(
   }
 }
 
-export function createAsyncDirectoryGuard(dir: string, options: { bigint: true }): Promise<AsyncDirectoryGuard<BigIntStats>>;
+export function createAsyncDirectoryGuard(dir: string, options: { bigint: true; initial?: BigIntStats }): Promise<AsyncDirectoryGuard<BigIntStats>>;
 export function createAsyncDirectoryGuard(dir: string, options?: { bigint?: false }): Promise<AsyncDirectoryGuard>;
 export function createAsyncDirectoryGuard(dir: string, options: { bigint: boolean }): Promise<AnyAsyncDirectoryGuard>;
-export async function createAsyncDirectoryGuard(dir: string, options?: { bigint?: boolean }): Promise<AnyAsyncDirectoryGuard> {
+export async function createAsyncDirectoryGuard(dir: string, options?: { bigint?: boolean; initial?: BigIntStats }): Promise<AnyAsyncDirectoryGuard> {
   const operationPath = directoryOperationPath(dir);
   const stat = options?.bigint
-    ? inspectDirectoryIdentityAtPathSync(operationPath)
+    ? inspectDirectoryIdentityAtPathSync(operationPath, undefined, options.initial)
     : fsSync.lstatSync(operationPath);
   if (stat.isSymbolicLink() || !stat.isDirectory()) {
     throw directoryComponentNotDirectoryError();
@@ -238,23 +238,30 @@ export function observeDirectoryIdentitySync(
 export function inspectDirectoryIdentitySync(
   dir: string,
   expected?: Pick<BigIntStats, "dev" | "ino">,
+  initial?: BigIntStats,
+  platform: NodeJS.Platform = process.platform,
 ): BigIntStats {
   const operationPath = directoryOperationPath(dir);
   const expectedIdentity = expected === undefined
     ? undefined
     : { dev: expected.dev, ino: expected.ino };
-  return inspectDirectoryIdentityAtPathSync(operationPath, expectedIdentity);
+  return inspectDirectoryIdentityAtPathSync(operationPath, expectedIdentity, initial, platform);
 }
 
 function inspectDirectoryIdentityAtPathSync(
   operationPath: string,
   expected?: Pick<BigIntStats, "dev" | "ino">,
+  initial?: BigIntStats,
+  platform: NodeJS.Platform = process.platform,
 ): BigIntStats {
   return inspectFileIdentitySync(() => {
-    const stat = fsSync.lstatSync(operationPath, { bigint: true });
+    // Traversal can supply the first exact observation. A bounded retry still
+    // uses the admitted operation path and retains every known identity bit.
+    const stat = initial ?? fsSync.lstatSync(operationPath, { bigint: true });
+    initial = undefined;
     if (stat.isSymbolicLink() || !stat.isDirectory()) throw directoryComponentNotDirectoryError();
     return stat;
-  }, expected);
+  }, expected, platform);
 }
 
 export type DirectoryObservationGuard = StatObservationReceipt & { dir: string; realPath: string };
