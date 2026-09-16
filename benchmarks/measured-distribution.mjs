@@ -8,6 +8,7 @@ import {
   validateSidecarPathSnapshotReport,
   validateSidecarPathSnapshotWorkloadResult,
 } from "./sidecar-path-snapshot.mjs";
+import { validateGuestBenchmarkReport } from "./guest.mjs";
 
 const SHA1 = /^[0-9a-f]{40}$/u;
 const SHA256 = /^[0-9a-f]{64}$/u;
@@ -113,6 +114,7 @@ export function validateMeasuredResult(result, expectedSamples, context = "bench
 }
 
 export function validateMeasuredDistribution(plan, reportPlan, report, expectedDistHash) {
+  validateGuestBenchmarkReport(report, plan.settings.filter);
   const expected = measuredSourceBinding(plan, reportPlan);
   const actual = report.metadata?.measuredDistribution;
   assert(actual && actual.binding === "method-audit-plan-v1", `${reportPlan.file} lacks a plan-bound distribution identity`);

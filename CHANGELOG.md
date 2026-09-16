@@ -4,6 +4,7 @@
 
 ### Fixes
 
+- Tolerate concurrent guest parent-directory creation only after descriptor-relative no-follow directory admission; file and symlink competitors remain rejected. Thanks @vincentkoc.
 - Close synchronous lock descriptors even when cleanup metadata inspection fails, preserving the original error and unverified sidecar.
 - Pin asynchronous relative sidecar-lock paths and roots to their entry-time working directory through acquisition, reclaim, verification, and release.
 - Apply Windows buffered-write compatibility locking and content verification, retaining the accepted destination descriptor through mode changes, sync, and final verification.

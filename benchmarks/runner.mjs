@@ -17,6 +17,7 @@ import { registerBroad } from "./broad.mjs";
 import { registerScaling } from "./scaling.mjs";
 import { registerCollections } from "./collections.mjs";
 import { registerSyncStoreDirectoryModes } from "./sync-store-directory-mode.mjs";
+import { registerGuest, validateGuestBenchmarkReport } from "./guest.mjs";
 import { observeFilenameFallbackProfile } from "./filename-fallback-profile.mjs";
 import {
   MEASURED_SOURCE_ARGUMENT_NAMES,
@@ -143,6 +144,7 @@ try {
   await registerScaling(context);
   await registerCollections(context);
   registerSyncStoreDirectoryModes(context);
+  const guest = registerGuest(context);
   const covered = new Set(cases.flatMap((c) => c.covers));
   const required = [...exportsByName.keys(), ...[...contracts].flatMap(([type, keys]) => keys.map((key) => `${type}.${key}`))];
   const missing = required.filter((name) => !covered.has(name) && !exclusions.has(name));
@@ -229,6 +231,7 @@ try {
       nativeHash,
       distHash,
       measuredDistribution,
+      guest,
       sampleSemantics: SAMPLE_SEMANTICS,
       harnessRevision: execFileSync("git", ["rev-parse", "HEAD"], {
         cwd: packageRoot,
@@ -251,6 +254,7 @@ try {
     coverage: { exports: Object.fromEntries(exportsByName), methods: Object.fromEntries(contracts), exclusions: Object.fromEntries(exclusions), registeredCases: cases.length, filtered: Boolean(args.filter) },
     results,
   };
+  validateGuestBenchmarkReport(completedReport, args.filter);
   completionMessage = `Measured ${results.filter((r) => !r.skipped).length} cases; ${required.length} callable exports/methods accounted for. Native ${args.mode}: ${native ? "loaded" : "off/unavailable"}.\n`;
 } catch (error) {
   executionFailures.push(error);
