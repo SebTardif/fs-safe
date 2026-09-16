@@ -82,7 +82,10 @@ valid.
 storage, then fs-safe copies through the guarded root boundary. Choose it when
 the temp and destination filesystems may differ, or when an externally produced
 partial file must never appear in the destination directory. The final target
-still appears only after guarded finalization.
+still appears only after guarded finalization. Its internal `tempFile()` does
+not expose `cleanupSafety` through this API and uses compatible cleanup, with
+the final check-to-pathname-recursive-removal gap documented in
+[`tempFile`](temp.md#tempfile).
 
 By default, `staging: "sibling"` gives the producer a randomized temp path in
 the target directory. Choose it only when that directory itself is the approved writable
@@ -127,12 +130,15 @@ file-sync, and final-rename lifecycle. Escaping symlinks still fail with
 
 Exact bigint parent and workspace identities are rechecked before moving
 output to the sibling path to reject observed replacements. Cleanup uses the
-existing [`withTempFile` ownership contract](temp.md#withtempfile). A moved or replaced parent or workspace can
-leave original or replacement paths behind; the option does not promise
-cleanup through a retained directory after a rename. The existing Windows and
-JavaScript pathname-guard limitations remain, with no additional permissions or
-durability guarantee. Native-off publication is supported only where hard links
-are available. See the [producer-isolation contract](temp.md#sibling-temp-writes)
+compatible [`withTempFile` ownership contract](temp.md#withtempfile); this
+output option does not expose `cleanupSafety: "require-bounded"`. A moved or
+replaced parent or workspace can leave artifacts, and a workspace substituted
+in the final check-to-pathname-recursive-removal gap can redirect traversal.
+The option does not promise cleanup through a retained directory after a
+rename. The existing Windows and JavaScript pathname-guard limitations remain,
+with no additional permissions or durability guarantee. Native-off publication
+is supported only where hard links are available. See the
+[producer-isolation contract](temp.md#sibling-temp-writes)
 for cleanup and pathname-race details. The option affects only `staging: "sibling"`;
 with `staging: "workspace"`, it is redundant and harmless because the producer
 already uses a private workspace. Omitting it leaves both staging defaults

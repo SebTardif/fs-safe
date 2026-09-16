@@ -320,6 +320,18 @@ try {
 }
 ```
 
+Options:
+
+```ts
+type TempFileOptions = {
+  rootDir?: string;
+  prefix: string;
+  fileName?: string;
+  onCleanupError?: (error: unknown) => void;
+  cleanupSafety?: "compatible" | "require-bounded"; // default compatible
+};
+```
+
 Returns:
 
 ```ts
@@ -332,9 +344,30 @@ type TempFile = {
 };
 ```
 
-Cleanup captures the directory identity at creation time. If that path is
-renamed away and replaced, cleanup preserves the replacement rather than
-recursively deleting a directory it did not create.
+The default `cleanupSafety: "compatible"` retains the historical temp-file
+behavior without loading or probing the native helper. Cleanup captures the
+directory identity at creation time and preserves a replacement observed by
+its pre-removal identity check. That check and pathname-recursive removal are
+separate operations, however: a same-privilege peer can substitute a directory
+in the final gap and redirect recursive traversal. Process-exit cleanup has the
+same compatible contract.
+
+The bounded mode requires an existing supplied root and applies the same
+trusted-ancestry admission as private temp workspaces. On POSIX it finalizes
+the new directory to `0o700` through its retained descriptor; Windows keeps
+identity checks without treating POSIX modes as ACL privacy. Unverified
+creation artifacts are preserved for caller-directed recovery.
+
+Set `cleanupSafety: "require-bounded"` to require the retained-parent,
+no-replace quarantine, and descriptor-bounded owned-tree removal described for
+[private temp workspaces](#private-temp-workspaces). Admission, including the
+runtime probe, completes before `mkdtemp`; unavailable support throws
+`FsSafeError("helper-unavailable")` before a child is created. Manual, disposal,
+scoped, and process-exit cleanup then share one owner, and no pathname-recursive
+fallback is used. `cleanup()` still resolves `Promise<void>`: operational
+cleanup errors are passed to `onCleanupError` when supplied and otherwise
+suppressed for compatibility. The bounded POSIX final-entry unlink limit still
+applies.
 
 ### `withTempFile`
 
@@ -442,13 +475,14 @@ direct child of `dir`.
 
 The isolated path retains exact bigint identities for both the parent and the
 workspace and rechecks them before moving output to the sibling path. An
-observed replacement is rejected. Cleanup uses the existing
-[`withTempFile` ownership contract](#withtempfile), backed by [`tempFile`](#tempfile):
-moving or replacing the parent or workspace can leave the original or
-replacement paths in place. This option does not promise cleanup through a
-retained directory after a rename, stronger permissions, or additional crash
-durability. Omitting it preserves the direct sibling callback path and
-unadmitted partial-file retention.
+observed replacement is rejected. This internal use of [`withTempFile`](#withtempfile)
+does not expose `cleanupSafety` and uses compatible cleanup: moving or replacing
+the parent or workspace can leave artifacts, and a workspace substituted in
+the final check-to-recursive-removal gap can redirect traversal. It does not
+promise cleanup through a retained directory after a rename, bounded cleanup,
+stronger permissions, or additional crash durability. Omitting producer
+isolation preserves the direct sibling callback path and unadmitted
+partial-file retention.
 
 On POSIX, admission uses no-follow and nonblocking open flags, so a FIFO swap
 does not block the helper. Windows retains Node's guarded pathname-open behavior
@@ -462,8 +496,11 @@ Identity checks and pathname rename/unlink are separate syscalls, not atomic
 conditional mutations. A hostile process can still replace a leaf or parent in
 the final syscall gap or mutate an open file's contents. Use an approved writable
 directory and cooperative locking or OS isolation; a moved parent can leave an
-unpublished original temp behind. Observed replacements are preserved, but
-arbitrary concurrent namespace changes cannot be prevented by these helpers.
+unpublished original temp behind. Replacements observed before the final
+namespace mutation are preserved, but that observation is not an atomic
+condition on the later unlink or rename. Private producer isolation also has
+the compatible recursive-cleanup gap described above. Arbitrary concurrent
+namespace changes cannot be prevented by these helpers.
 
 By default the helper attempts to set `dir` to `dirMode` (default `0o700`)
 through the shared verified POSIX directory-descriptor helper. Only the actual
@@ -494,8 +531,10 @@ await writeViaSiblingTempPath({
 If `replaceFileAtomic` does what you need, prefer that. Use
 `writeViaSiblingTempPath` when the producer needs a concrete temp pathname but
 the final destination still needs root-boundary checks.
-Its private workspace uses the same identity-aware directory cleanup as
-`tempFile()`: moving and replacing the workspace preserves the replacement.
+Its private workspace uses `tempFile()`'s compatible identity-aware cleanup.
+It preserves replacements observed before removal, but retains the final
+pathname-recursive-removal gap described above; this helper does not expose
+`cleanupSafety: "require-bounded"`.
 The callback staging component is capped at 255 bytes as written and under NFC and NFD by
 shortening only an overlong embedded destination tail, while preserving an
 extension when possible. Short callback paths and the final target stay

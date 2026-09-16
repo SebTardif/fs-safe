@@ -49,6 +49,10 @@
 - Add versioned, mutation-checked benchmark provenance for trusted reviewed revisions, including harness/source identities, measurement and report-file receipts, manifests, lockfiles, dist trees, bounded dependency layouts, native addons, and runner metadata; this detects accidental drift but is not a sandbox for hostile benchmark code.
 - Bind filename-sanitizer benchmark expectations to the measured revision's tracked source, validate all 17 profile rows before filtering, strengthen four long-name endpoint checks, add paired shared-mutation-admission fixtures with 60 portable and 96 Windows rows, and cover temp-workspace mode correction plus existing/missing roots at depths 4/8/32.
 
+### Features
+
+- Add opt-in bounded temp-file cleanup with retained directory ownership, preserving compatible defaults and closing descriptors when admission fails.
+
 ## 0.12.0 - 2026-09-15
 
 ### Highlights

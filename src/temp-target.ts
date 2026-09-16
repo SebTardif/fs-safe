@@ -11,6 +11,11 @@ import {
   assertNoWindowsPathAlias,
   resolvePathPreservingWindowsRoot,
 } from "./windows-path-alias.js";
+import type { TempWorkspaceRetainedChild as TempWorkspaceRetainedChildType } from "./temp-workspace-descriptor.js";
+import type {
+  TempWorkspaceCleanupOwner as TempWorkspaceCleanupOwnerType,
+  TempWorkspaceCleanupSafety,
+} from "./temp-workspace-owner.js";
 
 export type TempFile = {
   dir: string;
@@ -25,6 +30,7 @@ type TempFileOptions = {
   prefix: string;
   fileName?: string;
   onCleanupError?: (error: unknown) => void;
+  cleanupSafety?: TempWorkspaceCleanupSafety;
 };
 
 const HYPHEN_CHAR_CODE = 0x2d;
@@ -163,12 +169,120 @@ function resolveTempRoot(rootDir?: string): string {
   return resolvedRoot;
 }
 
+function resolveTempFileCleanupSafety(
+  value: TempWorkspaceCleanupSafety | undefined,
+): TempWorkspaceCleanupSafety {
+  if (value === undefined || value === "compatible") return "compatible";
+  if (value === "require-bounded") return value;
+  throw new TypeError("cleanupSafety must be compatible or require-bounded");
+}
+
 export async function createOwnedTempFile(params: TempFileOptions): Promise<{
   target: TempFile;
   identity: Readonly<Pick<fsSync.BigIntStats, "dev" | "ino">>;
 }> {
+  const cleanupSafety = resolveTempFileCleanupSafety(params.cleanupSafety);
   const rootDir = resolveTempRoot(params.rootDir);
   const prefix = `${sanitizePrefix(params.prefix)}-`;
+  if (cleanupSafety === "require-bounded") {
+    const initialFileName = sanitizeTempFileName(params.fileName ?? "download.bin");
+    const [
+      { TempWorkspaceCleanupCapability, TempWorkspaceCleanupOwner },
+      { admitExistingTempWorkspaceRoot },
+      { TempWorkspaceRetainedChild },
+      { validateInitialTempWorkspaceChild, admitRetainedTempWorkspaceChild },
+      { inspectDirectoryIdentitySync },
+    ] = await Promise.all([
+      import("./temp-workspace-owner.js"),
+      import("./temp-workspace-admission.js"),
+      import("./temp-workspace-descriptor.js"),
+      import("./temp-workspace-child-admission.js"),
+      import("./directory-guard.js"),
+    ]);
+    const admission = admitExistingTempWorkspaceRoot(rootDir);
+    const childPrefix = path.join(admission.dir, prefix);
+    assertNoWindowsPathAlias(childPrefix, "filesystem", "temp directory uses a Windows filesystem namespace alias");
+    const capability = new TempWorkspaceCleanupCapability(
+      admission.dir, cleanupSafety, admission, 0o700,
+    );
+    let dir: string;
+    let initialPath: string;
+    let identity: Readonly<Pick<fsSync.BigIntStats, "dev" | "ino">>;
+    let retainedChild: TempWorkspaceRetainedChildType | undefined;
+    let cleanupOwner: TempWorkspaceCleanupOwnerType | undefined;
+    let unregisterTempDir: () => void;
+    try {
+      capability.prepareChildCreation();
+      dir = await fs.mkdtemp(childPrefix);
+      assertNoWindowsPathAlias(dir, "filesystem", "temp directory uses a Windows filesystem namespace alias");
+      initialPath = path.join(dir, initialFileName);
+      assertNoWindowsPathAlias(initialPath, "filesystem", "temp file path uses a Windows filesystem namespace alias");
+      capability.assertCurrent();
+      const initial = inspectDirectoryIdentitySync(dir);
+      identity = Object.freeze({ dev: initial.dev, ino: initial.ino });
+      const needsModeInitialization = validateInitialTempWorkspaceChild(
+        initial, admission.ownerUid, 0o700,
+      );
+      retainedChild = TempWorkspaceRetainedChild.retain(dir, identity);
+      const modeInitialization = admitRetainedTempWorkspaceChild(
+        retainedChild, needsModeInitialization, admission, 0o700,
+      );
+      if (modeInitialization) await modeInitialization;
+      const retainDescriptor = capability.admitChildDescriptor(retainedChild.ensureReadable());
+      capability.assertAncestryCurrent();
+      retainedChild.finalizeAdmission(admission.ownerUid, 0o700);
+      cleanupOwner = new TempWorkspaceCleanupOwner(retainedChild, capability, retainDescriptor);
+      retainedChild = undefined;
+      unregisterTempDir = registerTempPathForExit(dir, {
+        cleanupSync: () => cleanupOwner!.cleanupSync(),
+      });
+    } catch (error) {
+      try {
+        if (cleanupOwner) cleanupOwner.cleanupSync();
+        else {
+          const closeErrors: unknown[] = [];
+          try { retainedChild?.close(); } catch (closeError) { closeErrors.push(closeError); }
+          try { capability.close(); } catch (closeError) { closeErrors.push(closeError); }
+          if (closeErrors.length === 1) throw closeErrors[0];
+          if (closeErrors.length > 1) {
+            throw new AggregateError(closeErrors, "temp file admission descriptor close failed");
+          }
+        }
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], "temp file creation and cleanup both failed");
+      }
+      throw error;
+    }
+    const owner = cleanupOwner!;
+    const file = (fileName?: string) => {
+      const filePath = path.join(dir, sanitizeTempFileName(fileName ?? params.fileName ?? "download.bin"));
+      assertNoWindowsPathAlias(filePath, "filesystem", "temp file path uses a Windows filesystem namespace alias");
+      return filePath;
+    };
+    const cleanup = async () => {
+      try {
+        try {
+          await owner.cleanup();
+        } catch (err) {
+          if (!isNodeErrorWithCode(err, "ENOENT")) {
+            params.onCleanupError?.(err);
+          }
+        }
+      } finally {
+        unregisterTempDir();
+      }
+    };
+    return {
+      target: {
+        dir,
+        path: initialPath,
+        file,
+        cleanup,
+        [Symbol.asyncDispose]: cleanup,
+      },
+      identity,
+    };
+  }
   const dir = await fs.mkdtemp(path.join(rootDir, prefix));
   assertNoWindowsPathAlias(dir, "filesystem", "temp directory uses a Windows filesystem namespace alias");
   // Windows file indexes can exceed Number.MAX_SAFE_INTEGER. Cleanup receipts

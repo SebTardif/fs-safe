@@ -386,6 +386,14 @@ function canonicalRootAdmission(
   };
 }
 
+export function admitExistingTempWorkspaceRoot(rootDir: string): TempWorkspaceRootAdmission {
+  const { admission, chain, missing, ownerUid } = rootPlan(rootDir);
+  if (missing.length > 0) {
+    throw new FsSafeError("helper-unavailable", "temp file cleanup parent is unavailable");
+  }
+  return admission ?? rootAdmission(chain!, ownerUid);
+}
+
 export async function admitTempWorkspaceRoot(rootDir: string): Promise<TempWorkspaceRootAdmission> {
   const { admission, chain, missing, ownerUid } = rootPlan(rootDir);
   if (admission) return admission;
