@@ -215,6 +215,26 @@ function directoryOperationPath(dir: string): string {
   return pathForWindowsFilesystem(directoryEntryPath(dir));
 }
 
+export function observeDirectoryIdentitySync(
+  dir: string,
+  options: { bigint: true },
+): BigIntStats;
+export function observeDirectoryIdentitySync(
+  dir: string,
+  options?: { bigint?: false },
+): Stats;
+export function observeDirectoryIdentitySync(
+  dir: string,
+  options?: { bigint?: boolean },
+): Stats | BigIntStats {
+  const entryPath = directoryOperationPath(dir);
+  const stat = options?.bigint
+    ? fsSync.lstatSync(entryPath, { bigint: true })
+    : fsSync.lstatSync(entryPath);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) throw directoryComponentNotDirectoryError();
+  return stat;
+}
+
 export function inspectDirectoryIdentitySync(
   dir: string,
   expected?: Pick<BigIntStats, "dev" | "ino">,
