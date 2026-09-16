@@ -1,7 +1,8 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __resetFsSafeNativeConfigForTest,
   configureFsSafeNative,
@@ -14,16 +15,24 @@ import {
 } from "../src/native.js";
 import { realpathSync } from "../src/realpath.js";
 import { root } from "../src/root.js";
+import { useSuiteFixture } from "./helpers/suite-fixture.js";
 import { useRealTempDirs } from "./helpers/vitest.js";
 
 const { tempRoot } = useRealTempDirs();
 const requireNativeObservation =
   process.env.FS_SAFE_REQUIRE_NATIVE_DIRECTORY_OBSERVATION === "1";
 
-afterEach(() => {
+let widthFixtureOwnsCleanup = false;
+
+function resetNativeTestState() {
   vi.restoreAllMocks();
   __resetNativeLoaderForTest();
   __resetFsSafeNativeConfigForTest();
+}
+
+afterEach(() => {
+  // A timed-out width test can still be using its loader and spies.
+  if (!widthFixtureOwnsCleanup) resetNativeTestState();
 });
 
 function installDirectoryObserver(
@@ -149,18 +158,34 @@ it("keeps native-off budgets explicit, including optimized root receipts", async
   }
 });
 
-it.each([0, 1, 101, 1000])(
-  "keeps the fixed native list cost independent of %i metadata entries",
-  async (width) => {
-    const rootDir = await tempRoot(`fs-safe-native-observation-width-${width}-`);
+describe.each([0, 1, 101, 1000])("native list with %i metadata entries", (width) => {
+  let rootDir: string | undefined;
+  const run = useSuiteFixture(async () => {
+    widthFixtureOwnsCleanup = true;
+    rootDir = await fs.mkdtemp(path.join(os.tmpdir(), `fs-safe-native-observation-width-${width}-`));
+    rootDir = await fs.realpath(rootDir);
     const selected = path.join(rootDir, "selected");
     await fs.mkdir(selected);
     for (let start = 0; start < width; start += 64) {
-      await Promise.all(Array.from({ length: Math.min(64, width - start) }, (_, offset) => {
+      const writes = await Promise.allSettled(Array.from({ length: Math.min(64, width - start) }, (_, offset) => {
         const index = start + offset;
         return fs.writeFile(path.join(selected, `entry-${String(index).padStart(4, "0")}`), "x");
       }));
+      for (const result of writes) {
+        if (result.status === "rejected") throw result.reason;
+      }
     }
+    return rootDir;
+  }, async () => {
+    try {
+      if (rootDir) await fs.rm(rootDir, { recursive: true, force: true });
+    } finally {
+      widthFixtureOwnsCleanup = false;
+      resetNativeTestState();
+    }
+  });
+
+  it("keeps the fixed native list cost independent of metadata width", () => run(async (rootDir) => {
     configureFsSafeNative({ mode: "auto" });
     const observeDirectory = installDirectoryObserver();
     const capability = await root(rootDir);
@@ -174,8 +199,8 @@ it.each([0, 1, 101, 1000])(
     );
     expect(calls.value).toHaveLength(width);
     expect(calls).toMatchObject({ lstats: width + 2, canonical: 0, observations: 2 });
-  },
-);
+  }));
+});
 
 it.each(["auto", "require"] as const)(
   "uses the full JavaScript path when the %s binding lacks the optional method",
