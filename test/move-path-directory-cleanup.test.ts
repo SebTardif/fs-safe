@@ -37,7 +37,7 @@ describe("copied-source directory cleanup", () => {
     it.each(["directory", "file", "missing"] as const)(
       "reports a %s replacement during child cleanup as stale", async (replacement) => {
         const move = await fixture(nested);
-        const original = await fs.lstat(move.directory);
+        const original = await fs.lstat(move.directory, { bigint: true });
         const published = vi.fn();
         const mutation = vi.fn();
         let mutationCountAtReplacement = 0;
@@ -72,9 +72,9 @@ describe("copied-source directory cleanup", () => {
         });
         await expect(fs.readFile(move.publishedChild, "utf8")).resolves.toBe("copied");
         await expect(fs.readdir(move.parked)).resolves.toEqual([]);
-        await expect(fs.lstat(move.parked)).resolves.toMatchObject({ dev: original.dev, ino: original.ino });
+        await expect(fs.lstat(move.parked, { bigint: true })).resolves.toMatchObject({ dev: original.dev, ino: original.ino });
         if (replacement === "directory") {
-          expect((await fs.lstat(move.directory)).ino).not.toBe(original.ino);
+          expect((await fs.lstat(move.directory, { bigint: true })).ino).not.toBe(original.ino);
           await expect(fs.readdir(move.directory)).resolves.toEqual([]);
         } else if (replacement === "file") {
           await expect(fs.readFile(move.directory, "utf8")).resolves.toBe("replacement");
