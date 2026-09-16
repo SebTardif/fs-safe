@@ -36,7 +36,7 @@ import {
 import type { SidecarLockAcquireOptions, SidecarLockHandle } from "./sidecar-lock-types.js";
 import { createSuppressedError } from "./suppressed-error.js";
 import { sleep } from "./timing.js";
-import { assertNoWindowsPathAlias } from "./windows-path-alias.js";
+import { anchorWindowsDriveRelativePath, assertNoWindowsPathAlias } from "./windows-path-alias.js";
 
 type SidecarFileHandle = Pick<NativeFileHandle, "fd" | "close" | "stat" | "writeFile">;
 
@@ -112,17 +112,19 @@ export async function acquireSidecarLock<TPayload extends Record<string, unknown
   validateSidecarLockCompromiseCheckIntervalMs(options.compromiseCheckIntervalMs);
   const targetPath = options.targetPath;
   const explicitLockPath = options.lockPath;
-  assertNoWindowsPathAlias(targetPath);
-  if (explicitLockPath !== undefined) assertNoWindowsPathAlias(explicitLockPath);
+  const anchoredTargetPath = anchorWindowsDriveRelativePath(targetPath);
+  assertNoWindowsPathAlias(anchoredTargetPath);
+  const resolvedTargetPath = path.resolve(anchoredTargetPath);
+  let resolvedLockPath: string | undefined;
+  if (explicitLockPath !== undefined) {
+    const anchoredLockPath = anchorWindowsDriveRelativePath(explicitLockPath);
+    assertNoWindowsPathAlias(anchoredLockPath);
+    resolvedLockPath = isCwdIndependentAbsolutePath(explicitLockPath)
+      ? explicitLockPath
+      : path.resolve(anchoredLockPath);
+  }
   context.ensureExitCleanupRegistered();
   const lockRoot = options.lockRoot;
-  const resolvedTargetPath = path.resolve(targetPath);
-  const resolvedLockPath =
-    explicitLockPath === undefined
-      ? undefined
-      : isCwdIndependentAbsolutePath(explicitLockPath)
-        ? explicitLockPath
-        : path.resolve(explicitLockPath);
   const normalizedTargetPath = await resolveNormalizedTargetPath(resolvedTargetPath, lockRoot);
   const lockPath = resolvedLockPath ?? `${normalizedTargetPath}.lock`;
   assertNoWindowsPathAlias(lockPath);

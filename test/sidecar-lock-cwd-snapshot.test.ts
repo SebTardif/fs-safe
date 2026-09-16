@@ -91,9 +91,9 @@ describe("async sidecar cwd snapshots", () => {
     },
   );
 
-  it.runIf(process.platform === "win32")(
-    "pins a drive-relative explicit lock path before cwd can change",
-    async ({ skip }) => {
+  it.runIf(process.platform === "win32").for(["target", "lock"] as const)(
+    "pins a drive-relative %s path before cwd can change",
+    async (relativeField, { skip }) => {
       const before = await tempRoot("fs-safe-sidecar-drive-before-");
       const after = await tempRoot("fs-safe-sidecar-drive-after-");
       if (!/^[A-Za-z]:[\\/]$/u.test(path.parse(before).root)) {
@@ -109,8 +109,8 @@ describe("async sidecar cwd snapshots", () => {
       try {
         process.chdir(before);
         const pending = manager.acquire({
-          targetPath: path.join(before, "state.json"),
-          lockPath: driveRelativeLockPath,
+          targetPath: relativeField === "target" ? `${drive}state.json` : path.join(before, "state.json"),
+          lockPath: relativeField === "lock" ? driveRelativeLockPath : absoluteLockPath,
           staleMs: 30_000,
           payload: () => ({ owner: "drive-relative" }),
         });
@@ -118,6 +118,7 @@ describe("async sidecar cwd snapshots", () => {
 
         const held = await pending;
         expect(held.lockPath).toBe(absoluteLockPath);
+        expect(held.normalizedTargetPath).toBe(path.join(before, "state.json"));
         await expect(held.verifyStillHeld()).resolves.toBe(true);
         await held.release();
         await expect(fs.stat(absoluteLockPath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -127,6 +128,33 @@ describe("async sidecar cwd snapshots", () => {
       }
     },
   );
+
+  it.runIf(process.platform === "win32")("rejects drive-relative stream aliases before normalization", async ({ skip }) => {
+    const before = await tempRoot("fs-safe-sidecar-drive-alias-");
+    if (!/^[A-Za-z]:[\\/]$/u.test(path.parse(before).root)) skip();
+    const drive = path.parse(before).root.slice(0, 2);
+    const alias = `${drive}bad:stream${path.sep}..${path.sep}state.lock`;
+    const manager = createSidecarLockManager(`drive-alias:${before}`);
+    const previousCwd = process.cwd();
+    let payloadCalls = 0;
+    try {
+      process.chdir(before);
+      for (const [targetPath, lockPath] of [
+        [alias, path.join(before, "state.lock")],
+        [path.join(before, "state.json"), alias],
+      ]) {
+        await expect(manager.acquire({
+          targetPath, lockPath, staleMs: 30_000,
+          payload: () => { payloadCalls += 1; return { owner: "must-not-run" }; },
+        })).rejects.toMatchObject({ code: "invalid-path", details: { reason: "windows-path-alias" } });
+      }
+      expect(payloadCalls).toBe(0);
+      expect(await fs.readdir(before)).toEqual([]);
+    } finally {
+      process.chdir(previousCwd);
+      await manager.drain();
+    }
+  });
 
   it("pins a relative explicit lock path through acquisition, verification, and release", async () => {
     const before = await tempRoot("fs-safe-sidecar-cwd-before-");
