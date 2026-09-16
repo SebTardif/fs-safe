@@ -37,7 +37,9 @@ function utf8(bytes: Buffer): string {
   catch { return zipFormat("invalid UTF-8 name"); }
 }
 
-function key(name: string): string {
+// Canonical identity only; this does not replace raw path validation.
+export function zipPathKey(name: string): string {
+  if (name && name !== "." && !name.includes("/") && !name.includes("\\")) return name;
   return stripArchivePath(name, 0) ?? "";
 }
 
@@ -63,7 +65,7 @@ export function admitZipNames(params: {
   central: Buffer; local: Buffer; flags: number;
   centralExtra: Map<number, Buffer>; localExtra: Map<number, Buffer>;
   seen: Set<string>;
-}): string | undefined {
+}): { path?: string; portableKey: string; directory: boolean } {
   const { central, local, flags, centralExtra, localExtra, seen } = params;
   if (!central.length || !local.length) zipFormat("empty entry name");
   // Reuse only within this synchronous call; shared backing bytes can change
@@ -82,33 +84,50 @@ export function admitZipNames(params: {
     (centralField === localField ||
       (centralField !== undefined && localField !== undefined && centralField.equals(localField)));
   const localUnicode = sameName && sameUnicode ? centralUnicode : unicodeName(local, localExtra);
-  const centralKey = key(centralRaw);
-  if (!sameName && centralKey !== key(localRaw)) {
+  const centralKey = zipPathKey(centralRaw);
+  if (!sameName && centralKey !== zipPathKey(localRaw)) {
     zipFormat("central and local names disagree");
   }
   const interpretations = [centralUtf8, localUtf8, centralUnicode, localUnicode].filter(
     (value): value is string => value !== undefined,
   );
-  const interpretationKey = interpretations.length ? key(interpretations[0]!) : undefined;
-  if (interpretations.some((value) => value !== interpretations[0] && key(value) !== interpretationKey)) {
+  // Canonical paths erase terminal separators. Preserve their kind meaning in
+  // every interpretation, including Unicode overrides of legacy-encoded names.
+  const directory = /[/\\]$/.test(centralRaw);
+  if (/[/\\]$/.test(localRaw) !== directory ||
+      interpretations.some((value) => /[/\\]$/.test(value) !== directory)) {
+    zipFormat("conflicting terminal directory markers");
+  }
+  const interpretationKey = interpretations.length ? zipPathKey(interpretations[0]!) : undefined;
+  if (interpretations.some((value) => value !== interpretations[0] && zipPathKey(value) !== interpretationKey)) {
     zipFormat("conflicting Unicode name interpretations");
   }
   // JSZip checks the central Unicode field against the local name. A slash-only
   // spelling difference must not make one decoder ignore a meaningful override.
   if (centralUnicode && !central.equals(local) &&
-      key(centralUnicode) !== key(local.toString("utf8"))) {
+      zipPathKey(centralUnicode) !== zipPathKey(local.toString("utf8"))) {
     zipFormat("Unicode override disagrees with local decoder name");
   }
-  if (!centralUnicode && localUnicode && key(localUnicode) !== key(local.toString("utf8"))) {
+  if (!centralUnicode && localUnicode && zipPathKey(localUnicode) !== zipPathKey(local.toString("utf8"))) {
     zipFormat("local-only Unicode override changes the name");
   }
   const unicodeKey = centralUnicode === undefined
-    ? undefined : key(Buffer.from(centralUnicode).toString("latin1"));
+    ? undefined : zipPathKey(Buffer.from(centralUnicode).toString("latin1"));
   if (seen.has(centralKey) ||
       (unicodeKey !== undefined && unicodeKey !== centralKey && seen.has(unicodeKey))) {
     throw new ArchiveSecurityError("entry-path", "zip archive contains duplicate or colliding entry names");
   }
   seen.add(centralKey);
   if (unicodeKey !== undefined && unicodeKey !== centralKey) seen.add(unicodeKey);
-  return centralUnicode ?? centralUtf8 ?? (central.every((byte) => byte < 128) ? central.toString("ascii") : undefined);
+  const path = centralUnicode ?? centralUtf8 ?? (central.every((byte) => byte < 128) ? central.toString("ascii") : undefined);
+  const portablePath = centralUnicode ?? localUtf8 ?? (sameName && path !== undefined ? path : local.toString("utf8"));
+  // Reuse the admitted interpretation, never the Latin-1 Unicode collision key.
+  // Unflagged legacy names can decode differently and need their own key.
+  const portableKey = portablePath === centralRaw ? centralKey
+    : interpretations.includes(portablePath) ? interpretationKey! : zipPathKey(portablePath);
+  return {
+    path,
+    portableKey,
+    directory,
+  };
 }

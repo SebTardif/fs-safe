@@ -11,6 +11,7 @@
 
 ### Security
 
+- Bind ZIP physical entry names and kinds to decoder metadata before callbacks or member selection, rejecting ambiguous interpretations consistently.
 - Snapshot secure-read policies, trusted-directory inputs, and selected environment values before asynchronous I/O so callers cannot change in-flight admission.
 - Recheck copied-directory identities after awaited child cleanup and before removal, preserving concurrently substituted directories.
 - Verify writable-file admission and post-open identity using private bigint receipts while retaining the public numeric Stats contract.
