@@ -9,6 +9,7 @@
 
 ### Security
 
+- Snapshot borrowed-file transfer options before I/O while retaining the original cancellation signal, mutation authority, and progress callbacks through partial writes.
 - Validate descriptor-bound Darwin ACL facts before clone admission and publication, correctly handling absent ACLs and rejecting unsafe staging states.
 - Bind nonrecursive removal to admitted parent receipts, and revalidate native move endpoint containment and explicit parent-symlink rejection before dispatch.
 - Repair synchronous store-directory permissions through no-follow descriptors and current exact identities, rechecking mode changes during the matching-mode fast path.

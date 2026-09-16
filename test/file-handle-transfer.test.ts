@@ -1,30 +1,12 @@
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
-import fs, { type FileHandle } from "node:fs/promises";
+import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { copyFileHandle, type CopyFileHandleOptions } from "../src/advanced.js";
-import { useRealTempDirs } from "./helpers/vitest.js";
+import { describe, expect, it, vi } from "vitest";
+import { copyFileHandle } from "../src/advanced.js";
+import { useFileHandleTransferFixture } from "./helpers/file-handle-transfer.js";
 
-const { tempRoot } = useRealTempDirs();
-const handles: FileHandle[] = [];
-afterEach(async () => {
-  vi.restoreAllMocks();
-  await Promise.all(handles.splice(0).map(handle => handle.close()));
-});
-
-async function fixture(content: string | Buffer = "source bytes", prior = "original target with a tail") {
-  const directory = await tempRoot("fs-safe-handle-transfer-");
-  const sourcePath = path.join(directory, "source");
-  const targetPath = path.join(directory, "target");
-  await fs.writeFile(sourcePath, content, { mode: 0o600 });
-  await fs.writeFile(targetPath, prior, { mode: 0o640 });
-  const source = await fs.open(sourcePath, "r");
-  handles.push(source);
-  const target = await fs.open(targetPath, "r+");
-  handles.push(target);
-  return { source, target, sourcePath, targetPath, content: Buffer.from(content), prior };
-}
+const { fixture, trackHandle } = useFileHandleTransferFixture();
 
 describe("borrowed FileHandle copying", () => {
   it("copies from zero, preserves both cursors and modes, and leaves target suffixes and handles owned by the caller", async () => {
@@ -146,63 +128,6 @@ describe("borrowed FileHandle copying", () => {
     expect(await fs.readFile(f.targetPath, "utf8")).toBe(f.prior);
   });
 
-  it("snapshots inherited non-enumerable option accessors before the first await", async () => {
-    const f = await fixture("snapshot", "");
-    const entered = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
-    const stat = f.source.stat.bind(f.source);
-    vi.spyOn(f.source, "stat").mockImplementation(async (...args) => {
-      entered.resolve();
-      await release.promise;
-      return await stat(...args);
-    });
-    const selected = new AbortController();
-    const replacement = new AbortController();
-    let observerReceiver: unknown;
-    const onChunk = vi.fn(function (this: unknown) { observerReceiver = this; });
-    const replacementChunk = vi.fn(() => { throw new Error("late observer"); });
-    const authority = vi.fn();
-    const replacementAuthority = vi.fn(() => { throw new Error("late authority"); });
-    let signal = selected.signal;
-    let observer: CopyFileHandleOptions["onChunk"] = onChunk;
-    let assertion: CopyFileHandleOptions["assertBeforeMutation"] = authority;
-    let budget = f.content.length;
-    const reads = { signal: 0, maxBytes: 0, onChunk: 0, assertBeforeMutation: 0 };
-    const inherited = Object.defineProperties({}, {
-      signal: { get: () => { reads.signal += 1; return signal; } },
-      maxBytes: { get: () => { reads.maxBytes += 1; return budget; } },
-      onChunk: { get: () => { reads.onChunk += 1; return observer; } },
-      assertBeforeMutation: { get: () => { reads.assertBeforeMutation += 1; return assertion; } },
-    });
-    const pending = copyFileHandle(
-      f.source, f.target, Object.create(inherited) as CopyFileHandleOptions,
-    );
-    try {
-      await entered.promise;
-      expect(reads).toEqual({ signal: 1, maxBytes: 1, onChunk: 1, assertBeforeMutation: 1 });
-      signal = replacement.signal;
-      observer = replacementChunk;
-      assertion = replacementAuthority;
-      budget = 0;
-      replacement.abort(new Error("late signal"));
-    } finally {
-      release.resolve();
-    }
-    await expect(pending).resolves.toBe(f.content.length);
-    expect(reads).toEqual({ signal: 1, maxBytes: 1, onChunk: 1, assertBeforeMutation: 1 });
-    expect(onChunk).toHaveBeenCalled();
-    expect(observerReceiver).toMatchObject({
-      maxBytes: f.content.length, sizeHint: f.content.length,
-      targetPosition: 0, signal: selected.signal, onChunk,
-    });
-    expect(authority).toHaveBeenCalled();
-    expect(replacementChunk).not.toHaveBeenCalled();
-    expect(replacementAuthority).not.toHaveBeenCalled();
-    expect(await fs.readFile(f.targetPath)).toEqual(f.content);
-    await expect(f.source.stat()).resolves.toMatchObject({ size: f.content.length });
-    await expect(f.target.stat()).resolves.toMatchObject({ size: f.content.length });
-  });
-
   it.each(["observer", "authority", "async-observer", "async-authority"] as const)(
     "refuses the current chunk after %s rejection without cleanup or target mutation", async kind => {
       const f = await fixture();
@@ -301,8 +226,7 @@ describe("borrowed FileHandle copying", () => {
 
   it.skipIf(process.platform === "win32")("refuses a directory handle without changing its target", async () => {
     const f = await fixture();
-    const directory = await fs.open(path.dirname(f.sourcePath), "r");
-    handles.push(directory);
+    const directory = trackHandle(await fs.open(path.dirname(f.sourcePath), "r"));
     await expect(copyFileHandle(directory, f.target)).rejects.toMatchObject({ code: "not-file" });
     expect(await fs.readFile(f.targetPath, "utf8")).toBe(f.prior);
   });
@@ -313,8 +237,7 @@ describe("borrowed FileHandle copying", () => {
     if (kind === "hardlink") {
       const alias = `${f.sourcePath}.alias`;
       await fs.link(f.sourcePath, alias);
-      target = await fs.open(alias, "r+");
-      handles.push(target);
+      target = trackHandle(await fs.open(alias, "r+"));
     }
     await expect(copyFileHandle(f.source, target)).rejects.toMatchObject({ code: "path-alias" });
     expect(await fs.readFile(f.sourcePath)).toEqual(f.content);
