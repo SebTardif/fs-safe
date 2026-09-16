@@ -8,6 +8,7 @@
 
 ### Security
 
+- Repair synchronous store-directory permissions through no-follow descriptors and current exact identities, rechecking mode changes during the matching-mode fast path.
 - Fence low-level root-file opens with exact root and final-file identities, consistently admitting native Windows root spellings without weakening symlink or replacement rejection.
 - Fence Root reads against replacement of the captured root and final path, rejecting swapped trees before returning file contents or handles.
 - Make no-clobber Root moves atomic through native rename primitives and preserve identity-pinned isolated producer handoff, including legacy Windows delete-pending behavior.
