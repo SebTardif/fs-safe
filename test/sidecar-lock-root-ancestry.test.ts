@@ -20,7 +20,7 @@ it.skipIf(process.platform === "win32")("rechecks ancestors even when the immedi
   const capability = await root(await tempRoot("sidecar-ancestor-swap-"));
   const relative = "ancestor/parent/state.lock", lockPath = path.join(capability.rootReal, relative);
   await capability.create(relative, "{}");
-  __setFsSafeTestHooksForTest({ async afterOpenedPathIdentityCheck(candidate) {
+  __setFsSafeTestHooksForTest({ async beforeRootReadFinalFence(candidate) {
     if (candidate !== lockPath) return;
     __setFsSafeTestHooksForTest();
     await fs.unlink(lockPath);
@@ -30,7 +30,7 @@ it.skipIf(process.platform === "win32")("rechecks ancestors even when the immedi
     await fs.rename(`${ancestor}.old/parent`, `${ancestor}/parent`);
   } });
   await expect(readSidecarLockSnapshot(lockPath, { lockRoot: capability, discardObservation: "unlinked" }))
-    .rejects.toMatchObject({ code: "path-mismatch" });
+    .rejects.toMatchObject({ code: "not-found" });
 });
 
 it.skipIf(process.platform === "win32")("permits an unchanged canonical parent reached through an in-root symlink", async () => {
@@ -39,7 +39,7 @@ it.skipIf(process.platform === "win32")("permits an unchanged canonical parent r
   await fs.symlink("actual", path.join(capability.rootReal, "alias"));
   const lockPath = path.join(capability.rootReal, "alias/state.lock");
   await capability.create("actual/state.lock", "{}");
-  __setFsSafeTestHooksForTest({ async afterOpenedPathIdentityCheck(candidate) {
+  __setFsSafeTestHooksForTest({ async beforeRootReadFinalFence(candidate) {
     if (candidate !== path.join(capability.rootReal, "actual/state.lock")) return;
     __setFsSafeTestHooksForTest();
     await fs.unlink(lockPath);
@@ -57,7 +57,7 @@ it.each(["numeric", "unknown", "changed", "EACCES", "EIO"])("rejects %s canonica
   const capability = await root(await tempRoot("sidecar-directory-evidence-"));
   const lockPath = path.join(capability.rootReal, "parent/state.lock"), parent = path.dirname(lockPath);
   await capability.create("parent/state.lock", "{}");
-  __setFsSafeTestHooksForTest({ async afterOpenedPathIdentityCheck(candidate) {
+  __setFsSafeTestHooksForTest({ async beforeRootReadFinalFence(candidate) {
     if (candidate !== lockPath) return;
     __setFsSafeTestHooksForTest();
     await fs.unlink(lockPath);
@@ -73,7 +73,7 @@ it.each(["numeric", "unknown", "changed", "EACCES", "EIO"])("rejects %s canonica
     });
   } });
   await expect(readSidecarLockSnapshot(lockPath, { lockRoot: capability, discardObservation: "unlinked" }))
-    .rejects.toMatchObject({ code: "path-mismatch" });
+    .rejects.toMatchObject({ code: "not-found" });
 });
 
 it.each(["EACCES", "EIO"])("does not treat initial directory %s as missing-parent evidence", async (code) => {

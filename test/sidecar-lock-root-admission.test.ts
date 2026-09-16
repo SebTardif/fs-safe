@@ -25,7 +25,7 @@ function mutateOpened(lockPath: string, mutate: (handle: FileHandle) => Promise<
     await mutate(handle);
   };
   __setFsSafeTestHooksForTest(afterIdentity
-    ? { afterOpenedPathIdentityCheck: hook } : { afterOpen: hook });
+    ? { beforeRootReadFinalFence: hook } : { afterOpen: hook });
   return () => opened;
 }
 
@@ -82,7 +82,7 @@ posix("generic Root.open remains strict after a direct test unlink", async () =>
     await fs.unlink(lockPath);
     expect((await handle.stat({ bigint: true })).nlink).toBe(0n);
   });
-  await expect(capability.open("file")).rejects.toMatchObject({ code: "path-mismatch" });
+  await expect(capability.open("file")).rejects.toMatchObject({ code: "not-found" });
   expect(opened()?.fd).toBe(-1);
 });
 
@@ -246,7 +246,7 @@ posix("rejects a Root replaced after its absence probe", async () => {
     }
   });
   await expect(readSidecarLockSnapshot(lockPath, { lockRoot: capability, discardObservation: "unlinked" }))
-    .rejects.toMatchObject({ code: "path-mismatch" });
+    .rejects.toMatchObject({ code: "not-found" });
   expect(opened()?.fd).toBe(-1);
 });
 

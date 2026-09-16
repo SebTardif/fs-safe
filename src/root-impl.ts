@@ -12,9 +12,10 @@ import { FsSafeError } from "./errors.js";
 import { syncDirectoryBestEffort } from "./directory-durability.js";
 import { sameFileIdentity, sameFileIdentityForCleanup, type FileIdentityStat } from "./file-identity.js";
 import { withAsyncDirectoryGuards } from "./guarded-mutation.js";
+import { openLocalFileDescriptor } from "./local-file-descriptor.js";
 import { assertMutationNotDenied, mergeDenyMutationPolicies, type DenyMutationPolicy } from "./deny-mutations.js";
 import { resolveOpenedFileRealPathForFd, resolveOpenedFileRealPathForHandle } from "./opened-realpath.js";
-import { openedPathResolutionError, recordExclusiveCreateFailure, recordFileOpenFailure, recordOpenedFileFailure, recordPreOpenFileChange } from "./opened-file-failure.js";
+import { openedPathResolutionError, recordExclusiveCreateFailure, recordOpenedFileFailure } from "./opened-file-failure.js";
 import { runPinnedWriteHelper, runPinnedWriteWithRenamePolicy } from "./pinned-write.js";
 import type { PinnedWriteInput, RenameIdentityPolicy } from "./pinned-write.js";
 import { preparePinnedWriteMutationAdmission, snapshotPinnedMutationPolicy } from "./pinned-mutation-admission.js";
@@ -23,14 +24,12 @@ import { validatePinnedOperationPayload } from "./pinned-operation.js";
 import { PATH_ALIAS_POLICIES } from "./path-policy.js";
 import {
   assertNoNulPathInput,
-  assertNoUnsafeDeviceReadPath,
   hasNodeErrorCode,
   isNotFoundPathError,
   isSymlinkOpenError,
 } from "./path.js";
 import { readOpenedFileSafely, type ReadResult } from "./read-opened-file.js";
 import { cleanupPinnedFilePath } from "./replace-file-temp-owner.js";
-import { resolveReadOpenFlags } from "./read-open-flags.js";
 import { realpathSync } from "./realpath.js";
 import { mkdirPathFallback, prepareRootWriteTarget, tryMkdirAtExactParent } from "./root-directory-creation.js";
 import { isNonRegularWriteOpenError, resolveNonblockingWriteFlag } from "./write-open-flags.js";
@@ -84,6 +83,7 @@ import {
 import { prepareSharedRootWriteTarget } from "./root-write-complete-parent.js";
 import { inspectFileIdentity } from "./strict-file-identity.js";
 import { movePathNoReplaceNative } from "./root-move-noreplace.js";
+import { admitRootReadHandle, inspectOpenedPathIdentitySync } from "./root-read-admission.js";
 import { createCopyPublicationObserver, onCopyPublication, type CopyPublicationOptions } from "./copy-publication.js";
 import { writeAllToFile } from "./write-file-handle.js";
 import { createInputOptions, rethrowCreateInputError, rootWriteInput, type RootWriteParams } from "./root-create-input.js";
@@ -128,8 +128,6 @@ function logWarn(message: string): void {
 }
 
 const SUPPORTS_NOFOLLOW = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
-const OPEN_READ_FLAGS = resolveReadOpenFlags();
-const OPEN_READ_FOLLOW_FLAGS = resolveReadOpenFlags({ followSymlinks: true });
 const OPEN_WRITE_EXISTING_FLAGS =
   fsConstants.O_WRONLY | (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0) |
   resolveNonblockingWriteFlag();
@@ -164,79 +162,11 @@ function openResult(params: {
 
 async function openVerifiedLocalFile(
   filePath: string,
-  options?: {
-    hardlinks?: HardlinkPolicy;
-    symlinks?: SymlinkPolicy;
-  },
+  options?: { hardlinks?: HardlinkPolicy; symlinks?: SymlinkPolicy },
 ): Promise<{ opened: OpenResult; identity: BigIntStats }> {
-  assertNoUnsafeDeviceReadPath(filePath);
   const fsSafeTestHooks = getFsSafeTestHooks();
-  let preOpenStat: BigIntStats | undefined;
-  let observedBeforeOpen = false;
-  // Reject directories before opening so we never surface EISDIR to callers (e.g. tool
-  // results that get sent to messaging channels). See openclaw/openclaw#31186.
+  const { handle, stat, identity, preOpenStat } = await openLocalFileDescriptor(filePath, options);
   try {
-    preOpenStat = await inspectFileIdentity(async () => {
-      const stat = fsSync.lstatSync(filePath, { bigint: true });
-      observedBeforeOpen = true;
-      if (stat.isSymbolicLink() && options?.symlinks !== "follow-within-root") {
-        throw new FsSafeError("symlink", "symlink not allowed");
-      }
-      if (!stat.isFile() && !stat.isSymbolicLink()) {
-        throw new FsSafeError("not-file", "not a file");
-      }
-      return stat;
-    });
-  } catch (err) {
-    if (err instanceof FsSafeError || observedBeforeOpen) {
-      throw err;
-    }
-    // Only an initial lookup failure falls through; a failed re-inspection aborts.
-  }
-  if (preOpenStat) {
-    await fsSafeTestHooks?.afterPreOpenLstat?.(filePath);
-  }
-
-  const openFlags = options?.symlinks === "follow-within-root"
-    ? OPEN_READ_FOLLOW_FLAGS
-    : OPEN_READ_FLAGS;
-  await fsSafeTestHooks?.beforeOpen?.(filePath, openFlags);
-  let handle: FileHandle;
-  try {
-    handle = await fs.open(filePath, openFlags).catch((error: unknown) =>
-      recordFileOpenFailure(isNotFoundPathError(error) ? fileNotFoundError() : error, filePath));
-  } catch (err) {
-    if (isSymlinkOpenError(err)) {
-      throw new FsSafeError("symlink", "symlink open blocked", { cause: err });
-    }
-    // Defensive: if open still throws EISDIR (e.g. race), sanitize so it never leaks.
-    if (hasNodeErrorCode(err, "EISDIR")) {
-      throw new FsSafeError("not-file", "not a file");
-    }
-    throw err;
-  }
-
-  try {
-    await fsSafeTestHooks?.afterOpen?.(filePath, handle);
-    const stat = fsSync.fstatSync(handle.fd);
-    if (!stat.isFile()) {
-      throw new FsSafeError("not-file", "not a file");
-    }
-    // Keep numeric Stats for the public receipt, never for identity verification.
-    let openedIdentity: BigIntStats | undefined;
-    const identity = await inspectFileIdentity(
-      async () => (openedIdentity = fsSync.fstatSync(handle.fd, { bigint: true })),
-      preOpenStat && !preOpenStat.isSymbolicLink() ? preOpenStat : undefined,
-    ).catch(async (error: unknown) => {
-      if ([0, 1].includes(stat.nlink)) {
-        await recordPreOpenFileChange(error, handle, filePath, preOpenStat, openedIdentity);
-      }
-      throw error;
-    });
-    if (options?.hardlinks === "reject" && stat.nlink > 1) {
-      throw hardlinkedPathNotAllowedError();
-    }
-
     const inspectPathIdentity = async (inspect: () => Promise<BigIntStats>) => {
       try {
         return await inspectFileIdentity(inspect, identity);
@@ -248,15 +178,7 @@ async function openVerifiedLocalFile(
         throw failure;
       }
     };
-    await inspectPathIdentity(async () => {
-      const pathStat = options?.symlinks === "follow-within-root"
-        ? fsSync.statSync(filePath, { bigint: true })
-        : fsSync.lstatSync(filePath, { bigint: true });
-      if (pathStat.isSymbolicLink() && options?.symlinks !== "follow-within-root") {
-        throw new FsSafeError("symlink", "symlink not allowed");
-      }
-      return pathStat;
-    });
+    await inspectPathIdentity(async () => inspectOpenedPathIdentitySync(filePath, options?.symlinks));
 
     await fsSafeTestHooks?.afterOpenedPathIdentityCheck?.(filePath, handle);
     const resolved = await resolveOpenedFileRealPathForFd(handle.fd, identity, filePath)
@@ -691,27 +613,23 @@ async function openFileInRoot(
     resolveCanonical: true,
   });
 
-  const { opened } = await openVerifiedLocalFile(resolved, {
+  const fsSafeTestHooks = getFsSafeTestHooks();
+  if (fsSafeTestHooks?.afterRootReadPathResolution) {
+    await fsSafeTestHooks.afterRootReadPathResolution(resolved);
+  }
+
+  const { handle, stat, identity } = await openLocalFileDescriptor(resolved, {
     symlinks: params.symlinks,
   });
-
-  if (params.hardlinks !== "allow" && opened.stat.nlink > 1) {
-    await opened.handle.close().catch(() => {});
-    throw hardlinkedPathNotAllowedError();
-  }
-
-  const admittedRealPath = admitPathInsideRoot({
-    rootPath: root.rootReal,
-    candidatePath: opened.realPath,
-    rootIdentity: root.rootIdentity,
+  // The admission helper owns the descriptor until the complete root/file/root
+  // fence succeeds, then transfers that still-open handle to the caller.
+  const admitted = await admitRootReadHandle({
+    root, filePath: resolved, opened: { handle, stat }, identity,
+    hardlinks: params.hardlinks, symlinks: params.symlinks,
+    beforeFinalFence: fsSafeTestHooks?.beforeRootReadFinalFence,
+    afterPathIdentityCheck: fsSafeTestHooks?.afterRootReadFinalPathIdentityCheck,
   });
-  if (!admittedRealPath) {
-    await opened.handle.close().catch(() => {});
-    throw outsideWorkspaceError();
-  }
-  opened.realPath = admittedRealPath.path;
-
-  return opened;
+  return openResult(admitted);
 }
 
 async function readFileInRoot(

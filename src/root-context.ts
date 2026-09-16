@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   extendDirectoryObservationGuard,
-  inspectDirectoryIdentity,
+  inspectDirectoryIdentitySync,
   inspectDirectoryObservationSync,
   type AsyncDirectoryGuard,
   type DirectoryObservationGuard,
@@ -156,11 +156,11 @@ export function rootRelativeReadPath(root: RootContext, filePath: string): strin
   return raw;
 }
 
-export async function assertRootIdentityCurrent(root: RootContext): Promise<void> {
+export function assertRootIdentityCurrentSync(root: RootContext): void {
   let current: fs.Stats;
   try {
     if (typeof root.rootIdentity.dev === "bigint" && typeof root.rootIdentity.ino === "bigint") {
-      await inspectDirectoryIdentity(root.rootReal, { dev: root.rootIdentity.dev, ino: root.rootIdentity.ino });
+      inspectDirectoryIdentitySync(root.rootReal, { dev: root.rootIdentity.dev, ino: root.rootIdentity.ino });
       return;
     }
     current = fs.lstatSync(root.rootReal);
@@ -174,6 +174,10 @@ export async function assertRootIdentityCurrent(root: RootContext): Promise<void
   ) {
     throw rootPathChangedError();
   }
+}
+
+export async function assertRootIdentityCurrent(root: RootContext): Promise<void> {
+  assertRootIdentityCurrentSync(root);
 }
 
 /**

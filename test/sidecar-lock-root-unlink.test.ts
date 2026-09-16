@@ -14,18 +14,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-// Intercept the actual descriptor resolver; all identities come from the filesystem.
-function atFdResolution(lockPath: string, mutate: (handle: FileHandle) => Promise<void>) {
+// Pause after descriptor verification; all identities come from the filesystem.
+function beforeFinalAdmission(lockPath: string, mutate: (handle: FileHandle) => Promise<void>) {
   let opened: FileHandle | undefined;
   let fired = false;
   let mutation: Promise<void> | undefined;
   __setFsSafeTestHooksForTest({
-    async afterOpenedPathIdentityCheck(candidate, handle) {
+    async beforeRootReadFinalFence(candidate, handle) {
       if (fired || candidate !== lockPath) return;
       opened = handle;
       fired = true;
       __setFsSafeTestHooksForTest();
-      // This awaited hook immediately precedes descriptor realpath resolution.
+      // Join owner release before the final pathname and containment observations.
       mutation = mutate(handle);
       await mutation;
     },
@@ -39,7 +39,7 @@ function atFdResolution(lockPath: string, mutate: (handle: FileHandle) => Promis
 }
 
 it.skipIf(process.platform === "win32").each(["snapshot"] as const)(
-  "completed owner release permits successor at %s FD resolution",
+  "completed owner release permits successor before %s final admission",
   async (phase) => {
     const capability = await root(await tempRoot("sidecar-discovery-"));
     const target = path.join(capability.rootReal, "state");
@@ -52,12 +52,12 @@ it.skipIf(process.platform === "win32").each(["snapshot"] as const)(
     const owner = await ownerManager.acquire(target, { ...options, payload: () => ({ owner: "original" }) });
     const ownerRaw = await fs.readFile(lockPath, "utf8");
     const events: string[] = [];
-    let gate: ReturnType<typeof atFdResolution> | undefined;
+    let gate: ReturnType<typeof beforeFinalAdmission> | undefined;
     const mutate = async (handle: FileHandle) => {
       const descriptor = await handle.stat({ bigint: true });
       const pathname = await fs.lstat(lockPath, { bigint: true });
       expect([descriptor.dev, descriptor.ino]).toEqual([pathname.dev, pathname.ino]);
-      events.push("descriptor-and-path-match-at-fd-resolver");
+      events.push("descriptor-and-path-match-before-final-admission");
       await owner.release();
       events.push("owner-release-joined");
       await expect(fs.lstat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -79,7 +79,7 @@ it.skipIf(process.platform === "win32").each(["snapshot"] as const)(
     vi.spyOn(capability, "open").mockImplementation(async (...args) => {
       if (phase === "snapshot" && !gate) {
         expect(events).toEqual(["create:already-exists"]);
-        gate = atFdResolution(lockPath, mutate);
+        gate = beforeFinalAdmission(lockPath, mutate);
       }
       return await realOpen(...args);
     });

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { root } from "../src/root.js";
+import { realpathSync } from "../src/realpath.js";
 import { __setFsSafeTestHooksForTest } from "../src/test-hooks.js";
 import { useTempDirs } from "./helpers/vitest.js";
 
@@ -83,23 +84,23 @@ describe("root read exact identity", () => {
       const filePath = path.join(scoped.rootReal, "value");
       await fs.writeFile(filePath, "original");
       let opened = false;
+      let canonical = false;
       let close: ReturnType<typeof vi.spyOn> | undefined;
       let read: ReturnType<typeof vi.spyOn> | undefined;
       const lstat = fsSync.lstatSync.bind(fsSync);
       vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
         const stat = lstat(...args);
         if (String(args[0]) === filePath && args[1]?.bigint &&
-          ((boundary === "preview" && !opened) || (boundary === "pathname" && opened))) {
+          ((boundary === "preview" && !opened) || (boundary === "pathname" && opened) ||
+            (boundary === "realpath" && canonical))) {
           stat.ino = 0n;
         }
         return stat;
       });
-      const stat = fsSync.statSync.bind(fsSync);
-      vi.spyOn(fsSync, "statSync").mockImplementation((...args) => {
-        const result = stat(...args);
-        if (String(args[0]) === filePath && args[1]?.bigint && boundary === "realpath") {
-          result.ino = 0n;
-        }
+      const realpath = realpathSync.native;
+      vi.spyOn(realpathSync, "native").mockImplementation((...args) => {
+        const result = realpath(...args);
+        if (opened && String(args[0]) === filePath) canonical = true;
         return result;
       });
       __setFsSafeTestHooksForTest({

@@ -10,7 +10,7 @@ export function pauseSidecarSnapshotOpen(lockPath: string, afterIdentityCheck: b
     await resumed.promise;
   };
   __setFsSafeTestHooksForTest(afterIdentityCheck
-    ? { afterOpenedPathIdentityCheck: pause }
+    ? { beforeRootReadFinalFence: pause }
     : { afterOpen: pause });
   return { opened: opened.promise, resume: resumed.resolve };
 }

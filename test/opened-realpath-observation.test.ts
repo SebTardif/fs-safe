@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveOpenedFileRealPathForFd } from "../src/opened-realpath.js";
 import { realpathSync } from "../src/realpath.js";
-import { root } from "../src/root.js";
+import { readLocalFileSafely, root } from "../src/root.js";
 import { __setFsSafeTestHooksForTest } from "../src/test-hooks.js";
 import { useRealTempDirs } from "./helpers/vitest.js";
 
@@ -69,7 +69,7 @@ describe("opened realpath observations", () => {
     }
   });
 
-  it.each(["stable", "hardlink", "windows retry"])("preserves final opened-file checks: %s", async (scenario) => {
+  it.each(["stable", "hardlink", "windows retry"])("preserves generic opened-file admission: %s", async (scenario) => {
     const directory = await tempRoot("fs-safe-realpath-read-");
     const safe = await root(directory);
     const target = path.join(safe.rootReal, "target");
@@ -94,9 +94,40 @@ describe("opened realpath observations", () => {
     });
     const pending = scenario === "hardlink"
       ? safe.copyIn("copy", target, { sourceHardlinks: "reject" })
-      : safe.readText("target");
+      : readLocalFileSafely({ filePath: target }).then(result => result.buffer.toString());
     if (scenario === "hardlink") await expect(pending).rejects.toMatchObject({ code: "hardlink" });
     else await expect(pending).resolves.toBe("payload");
     expect(observations).toBe(scenario === "windows retry" ? 2 : 1);
+  });
+
+  it.each(["standalone", "copy"])("%s rejects a pathname replacement after descriptor acquisition", async (caller) => {
+    const directory = await tempRoot("fs-safe-generic-admission-replacement-");
+    const safe = await root(directory);
+    const target = path.join(safe.rootReal, "target");
+    await fs.writeFile(target, "original");
+    let close: ReturnType<typeof vi.spyOn> | undefined;
+    let read: ReturnType<typeof vi.spyOn> | undefined;
+    const resolverHook = vi.fn();
+    __setFsSafeTestHooksForTest({
+      async afterOpen(candidate, handle) {
+        if (candidate !== target) return;
+        close = vi.spyOn(handle, "close");
+        read = vi.spyOn(handle, "read");
+        await fs.rename(target, `${target}.saved`);
+        await fs.writeFile(target, "replacement");
+      },
+      afterOpenedPathIdentityCheck: resolverHook,
+    });
+
+    const pending = caller === "copy"
+      ? safe.copyIn("copy", target)
+      : readLocalFileSafely({ filePath: target });
+    await expect(pending).rejects.toMatchObject({ code: "path-mismatch" });
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(read).not.toHaveBeenCalled();
+    expect(resolverHook).not.toHaveBeenCalled();
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("replacement");
+    await expect(fs.readFile(`${target}.saved`, "utf8")).resolves.toBe("original");
+    await expect(fs.lstat(path.join(directory, "copy"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

@@ -170,7 +170,7 @@ describe("sidecar lock helper failure handling", () => {
       gate.resume();
     }
     await result;
-    expect(probe).toHaveBeenCalledExactlyOnceWith("owner.json");
+    expect(probe).not.toHaveBeenCalled();
     expect(handle.fd).toBe(-1);
   });
 

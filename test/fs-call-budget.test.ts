@@ -9,9 +9,10 @@ import { readRegularFile } from "../src/regular-file.js";
 import { root } from "../src/root.js";
 import { useRealTempDirs } from "./helpers/vitest.js";
 
-// Measured fallback calls on macOS; allow two calls for platform variation.
+// Measured fallback calls on macOS; allow two calls for platform variation,
+// except for the exact root.readBytes final-fence ceiling.
 const budgets = {
-  "root.readBytes": 16, // measured 14, including the post-read EOF size observation
+  "root.readBytes": 16, // one final admission: four identities, canonicalization, and EOF size
   readRegularFile: 9, // measured 7
   tryReadJson: 10, // measured 8
   replaceFileAtomic: 20, // measured 18
@@ -92,6 +93,10 @@ describe.skipIf(process.platform === "win32")("fallback filesystem call budgets"
         expect.soft(total, `${name}: ${total} calls; ${breakdown}`).toBeLessThanOrEqual(budgets[name]);
         expect.soft(asyncTotal, `${name}: ${asyncTotal} async calls; ${breakdown}`)
           .toBeLessThanOrEqual(asyncBudgets[name]);
+        if (name === "root.readBytes") {
+          expect.soft(total, breakdown).toBe(16);
+          expect.soft(asyncTotal, breakdown).toBe(3); // open, read, close
+        }
       }
     } finally {
       counting = false;

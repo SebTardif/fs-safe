@@ -64,7 +64,7 @@ describe("asynchronous sidecar lock acquisition failures", () => {
         expect(raw).not.toBe(ownerRaw);
         expect(create.mock.calls.at(-1)?.[1]).toBe(raw);
         if (afterIdentityCheck) {
-          await expect(open.mock.results[0]?.value).rejects.toMatchObject({ code: "path-mismatch" });
+          await expect(open.mock.results[0]?.value).rejects.toMatchObject({ code: "not-found" });
         }
         expect(opened.fd).toBe(-1);
         await expect(waiter.verifyStillHeld()).resolves.toBe(true);

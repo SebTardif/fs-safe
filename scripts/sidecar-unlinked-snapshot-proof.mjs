@@ -89,7 +89,7 @@ async function proveHandoff(capability, ownerManager, waiterManager) {
   const ownerBytes = await fs.readFile(lockPath);
   assert.deepEqual(JSON.parse(ownerBytes.toString("utf8")), ownerPayload);
 
-  const trace = observeSnapshot(capability, relative, "afterOpenedPathIdentityCheck", async () => {
+  const trace = observeSnapshot(capability, relative, "beforeRootReadFinalFence", async () => {
     await owner.release();
     await assert.rejects(fs.lstat(lockPath), { code: "ENOENT" });
   });
@@ -101,7 +101,7 @@ async function proveHandoff(capability, ownerManager, waiterManager) {
   }
   assert.equal(trace.hookCalls, 1);
   assert.equal(trace.opened?.fd, -1);
-  assert.deepEqual(trace.error, mismatch);
+  assert.deepEqual(trace.error, { name: "FsSafeError", code: "not-found" });
   assert.deepEqual(trace.probes, ["not-found"]);
   assert.deepEqual(trace.creates.map((call) => call.outcome), ["already-exists", "created"]);
   const waiterBytes = await fs.readFile(lockPath);
