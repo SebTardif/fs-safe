@@ -12,10 +12,18 @@ import {
 import { admitPathInsideRoot, type RootBoundaryIdentity } from "./root-boundary.js";
 
 export function absolutePathWithRawSegments(candidate: string): string {
-  if (path.isAbsolute(candidate)) return candidate;
-  const drive = path.parse(candidate).root;
+  if (path.sep !== "\\") {
+    if (path.isAbsolute(candidate)) return candidate;
+    const base = process.cwd();
+    return `${base}${base.endsWith(path.sep) ? "" : path.sep}${candidate}`;
+  }
+  const raw = path.sep === "\\" ? candidate.replaceAll("/", "\\") : candidate;
+  const absolute = path.isAbsolute(raw);
+  if (absolute && raw[0] !== "\\") return raw;
+  const drive = path.parse(raw).root;
+  if (absolute && drive !== "\\") return raw;
   const base = drive ? path.resolve(drive) : process.cwd();
-  return `${base}${path.sep}${candidate.slice(drive.length)}`;
+  return `${base}${base.endsWith(path.sep) ? "" : path.sep}${raw.slice(drive.length)}`;
 }
 
 export function rawPathRelativeToCanonicalRoot(

@@ -5,7 +5,7 @@ import { expect, it, vi } from "vitest";
 import { openRootFile, openRootFileSync } from "../src/root-file.js";
 import { useRealTempDirs } from "./helpers/vitest.js";
 
-const { tempRoot } = useRealTempDirs();
+const { tempRoot, tempDirs } = useRealTempDirs();
 
 it.each(["async", "sync"].flatMap(mode => [false, true].map(rejectSymlinks => ({ mode, rejectSymlinks }))))(
   "$mode retains symlink/parent traversal before opening (reject=$rejectSymlinks)",
@@ -33,22 +33,29 @@ it.each(["async", "sync"].flatMap(mode => [false, true].map(rejectSymlinks => ({
   },
 );
 
-it.runIf(process.platform === "win32").each(["async", "sync"])(
-  "%s preserves drive-relative inputs while rejecting their stream aliases",
-  async mode => {
-    const dir = await tempRoot("fs-safe-root-file-drive-");
+it.runIf(process.platform === "win32").each(
+  ["async", "sync"].flatMap(mode => ["drive-relative", "root-relative", "mixed-root-relative"].map(form => ({ mode, form }))),
+)(
+  "$mode preserves $form inputs while rejecting stream aliases",
+  async ({ mode, form }) => {
+    const dir = await fs.realpath(await fs.mkdtemp(path.join(process.cwd(), ".fs-safe-root-file-drive-")));
+    tempDirs.push(dir);
     const target = path.join(dir, "value");
     await fs.writeFile(target, "drive-relative bytes");
     const drive = path.parse(target).root.slice(0, 2);
-    const driveRelative = `${drive}${path.relative(path.resolve(drive), target)}`;
-    const params = { rootPath: dir, absolutePath: driveRelative, boundaryLabel: "fixture" };
+    let input = `${drive}${path.relative(path.resolve(drive), target)}`;
+    if (form !== "drive-relative") {
+      input = target.slice(drive.length);
+      if (form === "mixed-root-relative") input = input.replaceAll("\\", "/");
+    }
+    const params = { rootPath: dir, absolutePath: input, boundaryLabel: "fixture" };
     const opened = mode === "async" ? await openRootFile(params) : openRootFileSync(params);
     expect(opened.ok).toBe(true);
     if (!opened.ok) throw opened.error;
     try { expect(fsSync.readFileSync(opened.fd, "utf8")).toBe("drive-relative bytes"); }
     finally { fsSync.closeSync(opened.fd); }
 
-    const streamParams = { ...params, absolutePath: `${driveRelative}:hidden` };
+    const streamParams = { ...params, absolutePath: `${input}:hidden` };
     const stream = mode === "async" ? await openRootFile(streamParams) : openRootFileSync(streamParams);
     expect(stream).toMatchObject({
       ok: false,

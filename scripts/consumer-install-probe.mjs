@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync, realpathSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, writeFileSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 
 // Copied into each external consumer; all package resolution starts there.
 const expected = JSON.parse(readFileSync("expected.json", "utf8"));
@@ -62,6 +62,40 @@ for (const subpath of Object.keys(expected.rootPkg.exports)) {
     await import(subpath === "." ? expected.rootPkg.name : expected.rootPkg.name + subpath.slice(1));
   }
 }
+
+const { resolvePathPrefixSync } = await import("@openclaw/fs-safe/advanced");
+const prefixFixture = join(consumer, "path-prefix-proof");
+mkdirSync(prefixFixture);
+const canonicalPrefixFixture = realpathSync.native(prefixFixture);
+const prefixLive = join(canonicalPrefixFixture, "live.txt");
+writeFileSync(prefixLive, "path-prefix-live");
+assert.deepEqual(resolvePathPrefixSync(prefixLive), {
+  absolutePath: prefixLive,
+  existingPath: realpathSync.native(prefixLive),
+  unresolvedSegments: [],
+});
+const prefixMissing = join(canonicalPrefixFixture, "missing");
+const rawMissingInput = `${canonicalPrefixFixture}${sep}missing${sep}..${sep}live.txt`;
+function assertMissingPrefix(input, expectedAbsolutePath) {
+  assert.deepEqual(resolvePathPrefixSync(input), {
+    absolutePath: expectedAbsolutePath,
+    existingPath: canonicalPrefixFixture,
+    unresolvedSegments: ["missing", "..", "live.txt"],
+  });
+}
+assertMissingPrefix(rawMissingInput, rawMissingInput);
+if (process.platform === "win32") {
+  const driveRoot = parse(rawMissingInput).root;
+  assert.match(driveRoot, /^[A-Za-z]:\\$/);
+  const rootRelativeInput = rawMissingInput.slice(driveRoot.length - sep.length);
+  const currentDriveRoot = resolve(sep);
+  const rootedAbsoluteInput = `${currentDriveRoot}${currentDriveRoot.endsWith(sep) ? "" : sep}${rootRelativeInput.slice(sep.length)}`;
+  assertMissingPrefix(rootRelativeInput, rootedAbsoluteInput);
+  assertMissingPrefix(rootRelativeInput.replaceAll("\\", "/"), rootedAbsoluteInput);
+}
+assert.equal(readFileSync(prefixLive, "utf8"), "path-prefix-live");
+assert.equal(existsSync(prefixMissing), false);
+
 writeFileSync("installed.json", JSON.stringify({
   root: expected.rootPkg.name, version: expected.rootPkg.version,
   nativePackages: [...physical], binary,
