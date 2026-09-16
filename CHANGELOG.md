@@ -60,6 +60,7 @@
 
 ### Features
 
+- Add bounded missing-suffix alias probes with fixed path, depth, creation, and observation budgets plus identity-checked conservative cleanup.
 - Add resolvePathPrefixSync for physical traversal through existing prefixes with a raw missing suffix, preserving dangling aliases and propagating ambiguous resolution failures.
 - Add opt-in bounded temp-file cleanup with retained directory ownership, preserving compatible defaults and closing descriptors when admission fails.
 

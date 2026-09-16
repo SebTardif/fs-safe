@@ -34,6 +34,7 @@ The exports group into a handful of themes. Each documented helper has its own p
 | `resolvePathViaExistingAncestorSync` | – | Walk to an existing ancestor for paths whose tail does not yet exist. |
 | `resolvePathPrefixSync`, `ResolvedPathPrefix` | [path-prefix.md](path-prefix.md) | Follow physical symlink targets and return a canonical existing prefix with the raw missing suffix; propagate uncertain resolution failures. |
 | `probePathCaseInsensitiveSync`, `ProbePathCaseOptions` | [path-case.md](path-case.md) | Observe local ASCII-case behavior with explicit read-only mode and owned temporary-probe cleanup. |
+| `probePathSuffixAliasesSync`, `ProbePathSuffixAliasesOptions` | [path-suffix-aliases.md](path-suffix-aliases.md) | Observe selected missing suffix aliases with bounded temporary directory probes; ambiguity, dynamic budget exhaustion, or incomplete cleanup returns `undefined`. |
 
 `ensureDirectoryWithinRoot({ rootDir, requestedPath, scopeLabel, defaultDirName?, mode? })`
 returns `{ ok: true, path }` or `{ ok: false, error: string, diagnostic?: FsSafeError }`.

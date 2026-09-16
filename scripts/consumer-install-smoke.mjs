@@ -4,13 +4,36 @@ import { createHash } from "node:crypto";
 import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { consumerFixtureArtifacts } from "./consumer-fixture-artifacts.mjs";
 import { startConsumerRegistry } from "./consumer-registry.mjs";
-import { hostNativeTarget, nativeTargets } from "./native-targets.mjs";
+import { hostNativeTarget, nativePackageDirectory, nativeTargets } from "./native-targets.mjs";
 
 const exec = promisify(execFile);
 const readJson = (file) => JSON.parse(readFileSync(file, "utf8"));
+const sha256 = (file) => createHash("sha256").update(readFileSync(file)).digest("hex");
+const suffixCompiledModules = [
+  "advanced.js", "byte-budget.js", "config.js", "device-path.js", "directory-guard.js",
+  "durability.js", "errors.js", "file-hash.js", "file-identity.js", "file-observation.js",
+  "local-file-access.js", "native-config.js", "native.js", "path-suffix-aliases.js", "path.js",
+  "read-open-flags.js", "realpath.js", "root-errors.js", "safe-path-segment.js",
+  "strict-file-identity.js", "string-coerce.js",
+];
+const suffixScenarios = [
+  "identical-no-predicate",
+  "lookup-ascii",
+  "lookup-raw-nfc-nfd",
+  "lookup-non-ascii-case",
+  "lookup-nested",
+  "policy-exclusion-after-creation",
+  "exact-thrown-sentinel",
+  "relative-directory-anchored-before-getter-chdir",
+  "invalid-and-over-limit-no-mutation",
+  "deterministic-collision-exhaustion",
+  "callback-replaces-owned-ancestor",
+  "callback-makes-owned-directory-nonempty",
+];
 
 export function isolatedConsumerEnv(directory) {
   mkdirSync(directory, { recursive: true });
@@ -115,8 +138,27 @@ export async function consumerInstallSmoke({ rootPkg, manifest, outputDir, npmCl
       assert.equal(`sha512-${createHash("sha512").update(bytes).digest("base64")}`, dist.integrity);
     }
     const host = hostNativeTarget();
+    const expectedSourceCommit = process.env.FS_SAFE_EXPECTED_SOURCE_COMMIT;
+    if (expectedSourceCommit) {
+      assert.match(expectedSourceCommit, /^[0-9a-f]{40}$/i);
+      assert.equal(source.commit, expectedSourceCommit);
+      assert.match(source.tree, /^[0-9a-f]{40}$/i);
+      assert.equal(source.dirty, false);
+    }
+    const rootArtifact = artifacts.find((artifact) => artifact.pkg.name === rootPkg.name);
+    assert.ok(rootArtifact?.integrity);
+    const suffixProbeSource = readFileSync(new URL("./consumer-suffix-probe.mjs", import.meta.url));
+    const metadataHelperSource = readFileSync(new URL("./consumer-proof-metadata.mjs", import.meta.url));
+    const suffixExpected = {
+      source,
+      rootIntegrity: rootArtifact.integrity,
+      suffixCompiledSha256: Object.fromEntries(suffixCompiledModules.map((name) => [name, sha256(join("dist", name))])),
+      suffixProbeSha256: createHash("sha256").update(suffixProbeSource).digest("hex"),
+      metadataHelperSha256: createHash("sha256").update(metadataHelperSource).digest("hex"),
+      hostBinarySha256: sha256(fileURLToPath(new URL("fs-safe-native.node", nativePackageDirectory(host)))),
+    };
     const proof = {
-      host: host.label, node: process.version, source,
+      host: host.label, node: process.version, source, expectedSourceCommit: expectedSourceCommit ?? null,
       root: manifest.find((artifact) => artifact.name === rootPkg.name),
       syntheticForeignPackages: synthetic, managers: [],
     };
@@ -139,7 +181,6 @@ export async function consumerInstallSmoke({ rootPkg, manifest, outputDir, npmCl
         await run(command, args, directory, env);
         assert.deepEqual(Object.keys(readJson(join(directory, "package.json")).dependencies), [rootPkg.name]);
         const lockfile = readFileSync(join(directory, manager === "npm" ? "package-lock.json" : "pnpm-lock.yaml"), "utf8");
-        const rootArtifact = artifacts.find((artifact) => artifact.pkg.name === rootPkg.name);
         assert.ok(lockfile.includes(rootArtifact.integrity), "lockfile must pin the collected root tarball integrity");
         writeFileSync(join(directory, "expected.json"), JSON.stringify({
           rootPkg, host, omitted, platforms: nativeTargets.map((target) => target.package),
@@ -158,6 +199,8 @@ export async function consumerInstallSmoke({ rootPkg, manifest, outputDir, npmCl
           metadataHelperHash: createHash("sha256")
             .update(readFileSync(new URL("./consumer-proof-metadata.mjs", import.meta.url)))
             .digest("hex"),
+          manager: { name: manager, version },
+          ...suffixExpected,
         }));
         writeFileSync(join(directory, "probe.mjs"), readFileSync(new URL("./consumer-install-probe.mjs", import.meta.url)));
         await run([process.execPath, join(directory, "probe.mjs")], [], directory, env);
@@ -171,11 +214,22 @@ export async function consumerInstallSmoke({ rootPkg, manifest, outputDir, npmCl
         cases.auto = await hash("auto");
         cases.off = await hash("off");
         if (!omitted) {
+          const suffixProbe = join(directory, "suffix-probe.mjs");
+          writeFileSync(suffixProbe, suffixProbeSource);
+          writeFileSync(join(directory, "consumer-proof-metadata.mjs"), metadataHelperSource);
+          cases.suffixAliases = [];
+          for (const mode of ["off", "require"]) {
+            const receipt = JSON.parse(await run([process.execPath, suffixProbe], [mode], directory, env));
+            assert.equal(receipt.mode, mode);
+            assert.deepEqual(receipt.packageManager, { name: manager, version });
+            assert.deepEqual(receipt.source, source);
+            assert.deepEqual(receipt.rows.map((row) => row.scenario), suffixScenarios);
+            cases.suffixAliases.push(receipt);
+          }
           const secretProbe = join(directory, "secret-probe.mjs");
           const sidecarProbe = join(directory, "sidecar-snapshot-probe.mjs");
           writeFileSync(secretProbe, readFileSync(new URL("./consumer-secret-probe.mjs", import.meta.url)));
           writeFileSync(sidecarProbe, readFileSync(new URL("./consumer-sidecar-snapshot-probe.mjs", import.meta.url)));
-          writeFileSync(join(directory, "consumer-proof-metadata.mjs"), readFileSync(new URL("./consumer-proof-metadata.mjs", import.meta.url)));
           cases.secretDirectories = [];
           cases.sidecarSnapshots = [];
           for (const mode of ["off", "require"]) {

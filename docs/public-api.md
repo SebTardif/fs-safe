@@ -65,6 +65,11 @@ the caller selects any fallback. See [path case probing](path-case.md).
 path prefix from its raw unresolved suffix after physical symlink traversal.
 See [resolving path prefixes](path-prefix.md).
 
+`probePathSuffixAliasesSync` and `ProbePathSuffixAliasesOptions` compare selected
+missing relative suffixes beneath an existing directory using bounded temporary
+directory probes. The caller owns Unicode-pair policy, caching, and the fallback
+for `undefined`. See [path suffix alias probing](path-suffix-aliases.md).
+
 ## Guest source
 
 `@openclaw/fs-safe/guest` exports `GUEST_FILESYSTEM_PYTHON`,

@@ -6,6 +6,7 @@ export { copyFileHandle, type CopyFileHandleOptions } from "./file-handle-transf
 export { overwriteFileHandle, type OverwriteFileHandleOptions } from "./overwrite-file-handle.js";
 export { probePathCaseInsensitiveSync, type ProbePathCaseOptions } from "./path-case.js";
 export { resolvePathPrefixSync, type ResolvedPathPrefix } from "./path-prefix.js";
+export { probePathSuffixAliasesSync, type ProbePathSuffixAliasesOptions } from "./path-suffix-aliases.js";
 export {
   readDirectoryIdentity,
   assertDirectoryIdentitySync,
