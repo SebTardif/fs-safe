@@ -272,7 +272,19 @@ the preflight cap fails with `FsSafeError("too-large")`.
 If another writer changes source entries during the fallback, the staged copy
 throws `ESTALE` before commit when possible. If the destination has already
 been committed, cleanup still preserves the changed source entries and throws
-`ESTALE`. When allowed source names are hardlinks to the same inode, each owned
+`ESTALE`. Directory manifests retain an exact bigint device/inode receipt from
+copy admission. Each directory is rechecked after traversal, and the source root
+is checked again before publication. Cleanup checks the same receipt before
+removing children, then invokes mutation authority and rechecks the receipt and
+directory type immediately before removal. Unknown Windows identity
+components get at most one retry that retains known components; persistent
+ambiguity fails closed before further removal. A directory that disappeared or
+was replaced during child cleanup is reported as stale; an observed replacement
+is preserved. Unrelated children
+added to the original directory are preserved while unchanged copied children
+are still removed. These pathname checks remain best-effort: they cannot make
+the final identity check and removal atomic against another process.
+When allowed source names are hardlinks to the same inode, each owned
 unlink is verified through a remaining manifested alias and its exact resulting
 identity becomes the next cleanup receipt. This accounts for the operation's
 own link-count and ctime changes without suppressing unexpected external

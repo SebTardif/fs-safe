@@ -3,7 +3,7 @@ import fsSync, { constants as fsConstants } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createAsyncDirectoryGuard } from "./directory-guard.js";
+import { createAsyncDirectoryGuard, inspectDirectoryIdentitySync } from "./directory-guard.js";
 import { FsSafeError } from "./errors.js";
 import { guardedRename } from "./guarded-mutation.js";
 import {
@@ -245,6 +245,22 @@ async function copyRegularFilePinned(params: {
   return openedIdentity;
 }
 
+function inspectSourceDirectory(
+  sourcePath: string,
+  expected?: Pick<fsSync.BigIntStats, "dev" | "ino">,
+): fsSync.BigIntStats {
+  try {
+    return inspectDirectoryIdentitySync(sourcePath, expected);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    if (code === "ENOENT" || code === "ENOTDIR" ||
+      (error instanceof FsSafeError && (error.code === "path-mismatch" || error.code === "not-file"))) {
+      throw sourceChangedError(sourcePath);
+    }
+    throw error;
+  }
+}
+
 async function copyEntryWithManifest(
   from: string,
   to: string,
@@ -274,6 +290,8 @@ async function copyEntryWithManifest(
   }
 
   if (sourceStat.isDirectory()) {
+    const directoryStat = inspectSourceDirectory(from);
+    const directoryIdentity = Object.freeze({ dev: directoryStat.dev, ino: directoryStat.ino });
     await fs.mkdir(to, { mode: modeBits(sourceStat.mode) || 0o755 });
     options.onCreated?.(fsSync.lstatSync(to, { bigint: true }));
     const children: Array<{ name: string; manifest: CopiedEntryManifest }> = [];
@@ -296,10 +314,11 @@ async function copyEntryWithManifest(
     // Directory traversal is path-based in Node. Treat a changed parent as a
     // stale move before committing so swapped-in outside trees are not imported.
     await assertSourceStillMatches(from, identity);
+    inspectSourceDirectory(from, directoryIdentity);
     // mkdir() honors process umask. Restore the source mode before commit so
     // EXDEV fallback preserves directory permissions like fs.cp did.
     await chmodDirectoryPinned(to, modeBits(sourceStat.mode));
-    return { ...identity, children, kind: "directory" };
+    return { ...identity, children, directoryIdentity, kind: "directory" };
   }
 
   if (!sourceStat.isFile()) {
@@ -421,6 +440,7 @@ export async function movePathWithCopyFallback(
     );
     const cleanupState = createCleanupCopiedEntryState(sourcePath, manifest);
     await assertCopyDestinationOutsideSource(sourcePath, targetPath, manifest);
+    if (manifest.kind === "directory") inspectSourceDirectory(sourcePath, manifest.directoryIdentity);
     await guardedRename({
       from: staged,
       to: targetPath,
