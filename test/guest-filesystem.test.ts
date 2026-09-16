@@ -255,7 +255,7 @@ describe.skipIf(process.platform === "win32")("guest filesystem protocol", () =>
     expect(remove.status, remove.stderr.toString()).toBe(0);
     await expect(fs.lstat(path.join(root, "moved"))).rejects.toMatchObject({ code: "ENOENT" });
     expect(await fs.readFile(path.join(root, "nested", basename))).toEqual(payload);
-  });
+  }, 40_000); // Seven Python operations retain their individual five-second deadlines.
 
   it.each([
     { mode: 0o600, basename: "value", length: 5 },
