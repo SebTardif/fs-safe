@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createFileLockManager } from "../src/file-lock.js";
 import type { HeldSidecarLock } from "../src/sidecar-lock-acquire.js";
+import { useSuiteFixture } from "./helpers/suite-fixture.js";
 import { useRealTempDirs } from "./helpers/vitest.js";
 
 const { tempRoot } = useRealTempDirs();
@@ -21,14 +23,30 @@ function managerState(key: string): SharedManagerState {
 }
 
 describe("shared sidecar manager state", () => {
-  it.each([0, 32, 128])("constructs wrappers without visiting %s retained locks", async (count) => {
-    const directory = await tempRoot("fs-safe-lock-manager-scaling-");
-    const key = `scaling:${directory}`;
-    const manager = createFileLockManager(key);
-    try {
+  describe.each([0, 32, 128])("%s retained locks", (count) => {
+    let directory: string | undefined;
+    let manager: ReturnType<typeof createFileLockManager> | undefined;
+    const run = useSuiteFixture(async () => {
+      directory = await fs.mkdtemp(path.join(os.tmpdir(), "fs-safe-lock-manager-scaling-"));
+      directory = await fs.realpath(directory);
+      const key = `scaling:${directory}`;
+      manager = createFileLockManager(key);
       for (let index = 0; index < count; index++) {
         await manager.acquire(path.join(directory, `${index}.json`), { payload: () => ({}) });
       }
+      return { key, manager };
+    }, async () => {
+      await manager?.drain();
+      if (directory) {
+        try {
+          expect(await fs.readdir(directory)).toEqual([]);
+        } finally {
+          await fs.rm(directory, { recursive: true, force: true });
+        }
+      }
+    });
+
+    it("constructs wrappers without visiting retained locks", () => run(async ({ key, manager }) => {
       const held = managerState(key).held;
       const values = held.values.bind(held);
       let visited = 0;
@@ -45,10 +63,7 @@ describe("shared sidecar manager state", () => {
       } finally {
         traversal.mockRestore();
       }
-    } finally {
-      await manager.drain();
-    }
-    expect(await fs.readdir(directory)).toEqual([]);
+    }));
   });
 
   it("retains a legacy holder until every same-owner handle releases", async () => {
