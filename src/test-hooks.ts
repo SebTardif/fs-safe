@@ -17,6 +17,12 @@ export type FsSafeTestHooks = {
     targetPath: string,
   ) => Promise<void> | void;
   beforePinnedWriteParentAdmission?: (targetPath: string) => Promise<void> | void;
+  beforeRootStatObservation?: (targetPath: string) => Promise<void> | void;
+  beforeRootStatInitialObservation?: (targetPath: string) => Promise<void> | void;
+  beforeRootListObservation?: (
+    directoryPath: string,
+    withFileTypes: boolean,
+  ) => Promise<void> | void;
   afterPinnedWriteFallbackRename?: (targetPath: string) => Promise<void> | void;
   beforeSiblingTempWrite?: (tempPath: string) => Promise<void> | void;
   beforeSidecarLockSnapshotOpen?: (lockPath: string) => Promise<void> | void;

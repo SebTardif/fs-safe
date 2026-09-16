@@ -1,7 +1,13 @@
-import fs from "node:fs";
+import fs, { type BigIntStats } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { inspectDirectoryIdentity } from "./directory-guard.js";
+import {
+  extendDirectoryObservationGuard,
+  inspectDirectoryIdentity,
+  inspectDirectoryObservationSync,
+  type AsyncDirectoryGuard,
+  type DirectoryObservationGuard,
+} from "./directory-guard.js";
 import { FsSafeError } from "./errors.js";
 import { sameFileIdentity } from "./file-identity.js";
 import {
@@ -26,10 +32,17 @@ import {
 
 export type RootContext = {
   rootDir: string;
+  rootGuard?: AsyncDirectoryGuard<BigIntStats>;
   rootIdentity: { dev: number; ino: number } | { dev: bigint; ino: bigint };
   rootReal: string;
   rootWithSep: string;
 };
+
+function hasExactRootIdentity(
+  identity: RootContext["rootIdentity"],
+): identity is { dev: bigint; ino: bigint } {
+  return typeof identity.dev === "bigint" && typeof identity.ino === "bigint";
+}
 
 export const ensureTrailingSep = (value: string) =>
   value.endsWith(path.sep) ? value : value + path.sep;
@@ -87,11 +100,12 @@ export async function resolveRootContext(rootDir: string): Promise<RootContext> 
   const lexicalRoot = resolvePathPreservingWindowsRoot(rootDir);
   assertNoWindowsPathAlias(lexicalRoot, "filesystem", "root dir uses a Windows filesystem namespace alias");
   let rootReal: string;
+  let rootStat: BigIntStats;
   let rootIdentity: { dev: bigint; ino: bigint };
   try {
     rootReal = realpathSync.native(pathForWindowsFilesystem(rootDir));
     assertNoWindowsPathAlias(rootReal, "filesystem", "canonical root path uses a Windows filesystem namespace alias");
-    const rootStat = await inspectFileIdentity(() => {
+    rootStat = await inspectFileIdentity(() => {
       const stat = fs.statSync(rootReal, { bigint: true });
       if (!stat.isDirectory()) throw new FsSafeError("invalid-path", "root dir is not a directory");
       return stat;
@@ -108,6 +122,7 @@ export async function resolveRootContext(rootDir: string): Promise<RootContext> 
   }
   return {
     rootDir: lexicalRoot,
+    rootGuard: { dir: rootReal, realPath: rootReal, stat: rootStat },
     rootIdentity,
     rootReal,
     rootWithSep: ensureTrailingSep(rootReal),
@@ -158,6 +173,28 @@ export async function assertRootIdentityCurrent(root: RootContext): Promise<void
     !sameFileIdentity(current, root.rootIdentity)
   ) {
     throw rootPathChangedError();
+  }
+}
+
+/**
+ * Observe the current Root with an exact, operation-local receipt.
+ *
+ * This is deliberately separate from {@link assertRootIdentityCurrent}: callers
+ * must not retain the returned guard beyond the operation that requested it.
+ */
+export async function createRootObservationGuard(
+  root: RootContext,
+): Promise<DirectoryObservationGuard | undefined> {
+  const rootIdentity = root.rootIdentity;
+  if (!hasExactRootIdentity(rootIdentity)) {
+    await assertRootIdentityCurrent(root);
+    return undefined;
+  }
+  try {
+    const observed = await inspectDirectoryObservationSync(root.rootReal, rootIdentity);
+    return extendDirectoryObservationGuard(observed, root.rootReal, root.rootReal);
+  } catch (error) {
+    throw rootPathChangedError(error instanceof Error ? error : undefined);
   }
 }
 

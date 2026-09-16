@@ -36,7 +36,8 @@ import { mkdirPathFallback, prepareRootWriteTarget, tryMkdirAtExactParent } from
 import { isNonRegularWriteOpenError, resolveNonblockingWriteFlag } from "./write-open-flags.js";
 import { resolveRootPath } from "./root-path.js";
 import { admitPathInsideRoot } from "./root-boundary.js";
-import { openRootDirectoryListing, listDirectoryPath, pathStatFromStats } from "./root-directory-list.js";
+import { listDirectoryPath, openRootDirectoryListing } from "./root-directory-list.js";
+import { statResolvedPathInRoot } from "./root-path-stat.js";
 import { entriesInRoot, type RootEntriesOptions } from "./root-entries.js";
 import { assertMoveMutationAllowed } from "./root-move-preflight.js";
 import {
@@ -86,10 +87,8 @@ import { createCopyPublicationObserver, onCopyPublication, type CopyPublicationO
 import { writeAllToFile } from "./write-file-handle.js";
 import { createInputOptions, rethrowCreateInputError, rootWriteInput, type RootWriteParams } from "./root-create-input.js";
 import { assertFinalSymlinkRejected, mutationSymlinkResolution, readSymlinkResolution, type MutationSymlinkPolicy, type SymlinkPolicy } from "./root-symlink-policy.js";
-import {
-  assertNoWindowsPathAlias,
-  resolvePathPreservingWindowsRoot,
-} from "./windows-path-alias.js";
+import { assertNoWindowsPathAlias, resolvePathPreservingWindowsRoot } from "./windows-path-alias.js";
+import { resolvePinnedObservedPathInRoot, type PinnedObservedPath } from "./root-observed-path.js";
 
 import {
   mergeReadOptions, readDefaults,
@@ -355,6 +354,7 @@ export interface Root {
 }
 
 export class RootHandle implements Root {
+  private readonly rootGuard: RootContext["rootGuard"];
   private readonly rootIdentity: RootContext["rootIdentity"];
   readonly rootDir: string;
   readonly rootReal: string;
@@ -362,6 +362,7 @@ export class RootHandle implements Root {
   readonly defaults: RootDefaults;
 
   constructor(context: RootContext, defaults: RootDefaults = {}) {
+    this.rootGuard = context.rootGuard;
     this.rootIdentity = context.rootIdentity;
     this.rootDir = context.rootDir;
     this.rootReal = context.rootReal;
@@ -372,6 +373,7 @@ export class RootHandle implements Root {
   private get context(): RootContext {
     return {
       rootDir: this.rootDir,
+      rootGuard: this.rootGuard,
       rootIdentity: this.rootIdentity,
       rootReal: this.rootReal,
       rootWithSep: this.rootWithSep,
@@ -669,6 +671,7 @@ export function rootFromDirectoryGuard(
   normalizeMaxBytes(defaults.maxBytes);
   return new RootHandle({
     rootDir: resolvePathPreservingWindowsRoot(guard.dir),
+    rootGuard: { dir: guard.realPath, realPath: guard.realPath, stat: guard.stat },
     rootIdentity: { dev: guard.stat.dev, ino: guard.stat.ino },
     rootReal: guard.realPath,
     rootWithSep: ensureTrailingSep(guard.realPath),
@@ -1401,17 +1404,13 @@ async function resolvePinnedRootPathInRoot(
 }
 
 async function statPathFallback(root: RootContext, relativePath: string): Promise<PathStat> {
-  const resolved = await resolvePinnedPathInRoot(root, { relativePath, allowRoot: true });
-  try {
-    const stat = pathStatFromStats(fsSync.lstatSync(resolved.resolved));
-    await assertRootIdentityCurrent(root);
-    return stat;
-  } catch (error) {
-    if (isNotFoundPathError(error)) {
-      throw fileNotFoundError(error instanceof Error ? error : undefined);
-    }
-    throw error;
-  }
+  const initialObservationHook = getFsSafeTestHooks()?.beforeRootStatInitialObservation;
+  const observed = initialObservationHook
+    ? undefined
+    : await resolvePinnedObservedPathInRoot(root, relativePath, "stat");
+  const resolved: PinnedObservedPath = observed ??
+    await resolvePinnedPathInRoot(root, { relativePath, allowRoot: true });
+  return await statResolvedPathInRoot(root, resolved.resolved, resolved.receipt);
 }
 
 async function listPathFallback(
@@ -1419,8 +1418,10 @@ async function listPathFallback(
   relativePath: string,
   withFileTypes: boolean,
 ): Promise<string[] | DirEntry[]> {
-  const resolved = await resolvePinnedPathInRoot(root, { relativePath, allowRoot: true });
-  return await listDirectoryPath(root, resolved.resolved, withFileTypes);
+  const observed = await resolvePinnedObservedPathInRoot(root, relativePath, "directory");
+  const resolved: PinnedObservedPath = observed ??
+    await resolvePinnedPathInRoot(root, { relativePath, allowRoot: true });
+  return await listDirectoryPath(root, resolved.resolved, withFileTypes, resolved.receipt);
 }
 
 async function movePathFallback(

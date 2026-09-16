@@ -8,6 +8,7 @@
 
 ### Security
 
+- Fence Root metadata observations with exact target and parent identities so replaced descendants cannot supply out-of-root metadata or directory entries.
 - Snapshot secret-reader size and link policies once, before asynchronous work, so shared option mutation cannot relax symlink or hardlink rejection during an in-flight read.
 - Keep Windows temp-path admission active with platform adapters, validate canonical root prefixes before inspecting them, and preserve single-read lock-path accessors on Node.js 22.
 - Preserve single-read pinned-write pathname and identity snapshots on Node.js 22 by excluding named accessors before copying remaining caller-owned options.
