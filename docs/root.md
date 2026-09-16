@@ -231,7 +231,7 @@ the separate device/network policies remain in force. Ordinary colon-bearing
 names remain valid on POSIX where the operation's existing drive-relative rule
 does not otherwise reject them.
 
-`openWritable` opens a writable file with options `mode?: number` and `writeMode?: "replace" | "append" | "update"`. `replace` truncates existing files and is the default; `update` keeps existing contents. Use it for streaming output. Prefer `await using` for cleanup.
+`openWritable` opens a writable file with options `mode?: number` and `writeMode?: "replace" | "append" | "update"`. `replace` truncates existing files and is the default; `update` keeps existing contents. Before truncation or handle return, descriptor and pathname identities are compared with lossless bigint metadata; persistently unknown Windows identities fail closed. The returned `stat` remains an ordinary numeric Node `Stats` object. Use it for streaming output. Prefer `await using` for cleanup.
 
 `remove` leaves non-empty directories unchanged unless `recursive: true` is
 provided. Recursive removal defaults to streaming entries in filesystem order;

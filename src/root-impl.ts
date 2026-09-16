@@ -10,11 +10,10 @@ import type { ContainmentGuarantee } from "./containment.js";
 import { assertAsyncDirectoryGuard, assertSyncDirectoryGuard, createAsyncDirectoryGuard, createNearestExistingDirectoryGuard } from "./directory-guard.js";
 import { FsSafeError } from "./errors.js";
 import { syncDirectoryBestEffort } from "./directory-durability.js";
-import { sameFileIdentity, sameFileIdentityForCleanup, type FileIdentityStat } from "./file-identity.js";
 import { withAsyncDirectoryGuards } from "./guarded-mutation.js";
 import { openLocalFileDescriptor } from "./local-file-descriptor.js";
 import { assertMutationNotDenied, mergeDenyMutationPolicies, type DenyMutationPolicy } from "./deny-mutations.js";
-import { resolveOpenedFileRealPathForFd, resolveOpenedFileRealPathForHandle } from "./opened-realpath.js";
+import { resolveOpenedFileRealPathForFd } from "./opened-realpath.js";
 import { openedPathResolutionError, recordExclusiveCreateFailure, recordOpenedFileFailure } from "./opened-file-failure.js";
 import { runPinnedWriteHelper, runPinnedWriteWithRenamePolicy } from "./pinned-write.js";
 import type { PinnedWriteInput, RenameIdentityPolicy } from "./pinned-write.js";
@@ -29,7 +28,7 @@ import {
   isSymlinkOpenError,
 } from "./path.js";
 import { readOpenedFileSafely, type ReadResult } from "./read-opened-file.js";
-import { cleanupPinnedFilePath } from "./replace-file-temp-owner.js";
+import { cleanupPinnedFilePath, removePathIfIdentityUnchanged } from "./replace-file-temp-owner.js";
 import { realpathSync } from "./realpath.js";
 import { mkdirPathFallback, prepareRootWriteTarget, tryMkdirAtExactParent } from "./root-directory-creation.js";
 import { isNonRegularWriteOpenError, resolveNonblockingWriteFlag } from "./write-open-flags.js";
@@ -84,7 +83,7 @@ import {
 import { prepareSharedRootWriteTarget } from "./root-write-complete-parent.js";
 import { finishRootFallbackWrite } from "./root-write-publication.js";
 import { assertRootFallbackWritePath, withRootFallbackCompatibilityLock } from "./root-write-compatibility.js";
-import { inspectFileIdentity } from "./strict-file-identity.js";
+import { inspectFileIdentity, inspectFileIdentitySync } from "./strict-file-identity.js";
 import { movePathNoReplaceNative } from "./root-move-noreplace.js";
 import { admitRootReadHandle, inspectOpenedPathIdentitySync } from "./root-read-admission.js";
 import { createCopyPublicationObserver, onCopyPublication, type CopyPublicationOptions } from "./copy-publication.js";
@@ -384,7 +383,7 @@ export class RootHandle implements Root {
   ): Promise<WritableOpenResult> {
     assertValidRootDestinationPath(relativePath);
     const writeMode = options.writeMode ?? "replace";
-    return await openWritableFileInRoot(this.context, {
+    const target = await openWritableFileInRoot(this.context, {
       relativePath,
       mkdir: this.defaults.mkdir,
       mode: this.defaults.mode,
@@ -392,6 +391,7 @@ export class RootHandle implements Root {
       append: writeMode === "append",
       truncateExisting: writeMode === "replace",
     }).catch(rethrowMutationAuthorityError);
+    return target.opened;
   }
 
   async append(relativePath: string, data: string | Buffer, options: RootAppendOptions = {}): Promise<void> {
@@ -724,7 +724,7 @@ async function openWritableFileInRoot(
     append?: boolean;
     expectedWritePath?: string;
   },
-): Promise<WritableOpenResult> {
+): Promise<{ opened: WritableOpenResult; identity: BigIntStats }> {
   const guardedTarget = params.denyMutations === undefined && params.mutationSymlinks === undefined
     ? undefined
     : await resolveGuardedWriteTargetInRoot(root, {
@@ -812,44 +812,60 @@ async function openWritableFileInRoot(
   }
 
   let realPathForCleanup: string | null = null;
-  let createdIdentity: Stats | null = null;
+  let createdIdentity: BigIntStats | null = null;
   try {
     const stat = fsSync.fstatSync(handle.fd);
-    if (createdForWrite) {
-      createdIdentity = stat;
-    }
-    if (!stat.isFile()) {
-      throw new FsSafeError("not-file", "path is not a regular file under root");
-    }
-    if (stat.nlink > 1) {
-      throw hardlinkedPathNotAllowedError();
-    }
+    const identity = inspectFileIdentitySync(() => {
+      const observed = fsSync.fstatSync(handle.fd, { bigint: true });
+      if (!observed.isFile()) {
+        throw new FsSafeError("not-file", "path is not a regular file under root");
+      }
+      if (observed.nlink > 1n) throw hardlinkedPathNotAllowedError();
+      return observed;
+    });
+    if (createdForWrite) createdIdentity = identity;
 
+    let observedIoPath = false;
     try {
-      const lstat = fsSync.lstatSync(ioPath);
-      if (lstat.isSymbolicLink() || !lstat.isFile()) {
-        throw new FsSafeError(
-          lstat.isSymbolicLink() ? "symlink" : "not-file",
-          "path is not a regular file under root",
-        );
-      }
-      if (!sameFileIdentity(stat, lstat)) {
-        throw new FsSafeError("path-mismatch", "path changed during write");
-      }
+      inspectFileIdentitySync(() => {
+        const lstat = fsSync.lstatSync(ioPath, { bigint: true });
+        observedIoPath = true;
+        if (lstat.isSymbolicLink() || !lstat.isFile()) {
+          throw new FsSafeError(
+            lstat.isSymbolicLink() ? "symlink" : "not-file",
+            "path is not a regular file under root",
+          );
+        }
+        if (lstat.nlink > 1n) throw hardlinkedPathNotAllowedError();
+        return lstat;
+      }, identity);
     } catch (err) {
-      if (!isNotFoundPathError(err)) {
+      if (isNotFoundPathError(err) && !observedIoPath) {
+        // The opened file may have been renamed before its first pathname
+        // observation. The descriptor-bound resolver below must still find it.
+      } else if (err instanceof FsSafeError && err.code === "path-mismatch") {
+        throw new FsSafeError("path-mismatch", "path changed during write", { cause: err });
+      } else {
         throw err;
       }
     }
 
-    let realPath = await resolveOpenedFileRealPathForHandle(handle, ioPath);
+    let realPath = (await resolveOpenedFileRealPathForFd(handle.fd, identity, ioPath)).realPath;
     assertNoWindowsPathAlias(realPath, "filesystem", "resolved file path uses a Windows filesystem namespace alias");
-    const realStat = fsSync.statSync(realPath);
-    if (!sameFileIdentity(stat, realStat)) {
-      throw new FsSafeError("path-mismatch", "path mismatch");
-    }
-    if (realStat.nlink > 1) {
-      throw hardlinkedPathNotAllowedError();
+    try {
+      inspectFileIdentitySync(() => {
+        const realStat = fsSync.statSync(realPath, { bigint: true });
+        if (!realStat.isFile()) {
+          throw new FsSafeError("not-file", "path is not a regular file under root");
+        }
+        if (realStat.nlink > 1n) throw hardlinkedPathNotAllowedError();
+        return realStat;
+      }, identity);
+    } catch (err) {
+      if (err instanceof FsSafeError && err.code === "path-mismatch") {
+        throw new FsSafeError("path-mismatch", "path mismatch", { cause: err });
+      }
+      throw err;
     }
     const admittedRealPath = admitPathInsideRoot({
       rootPath: root.rootReal,
@@ -888,7 +904,7 @@ async function openWritableFileInRoot(
       [Symbol.asyncDispose]: () => handle.close().catch(() => undefined),
     };
     if (writeSelection) retainRootWriteSelection(result, writeSelection);
-    return result;
+    return { opened: result, identity };
   } catch (err) {
     const cleanupCreatedPath = createdForWrite && err instanceof FsSafeError;
     const cleanupPath = realPathForCleanup ?? ioPath;
@@ -904,7 +920,7 @@ async function appendFileInRoot(
   root: RootContext,
   params: RootAppendOptions & { relativePath: string; data: string | Buffer },
 ): Promise<void> {
-  const target = await openWritableFileInRoot(root, {
+  const { opened: target, identity } = await openWritableFileInRoot(root, {
     relativePath: params.relativePath,
     mkdir: params.mkdir,
     mode: params.mode,
@@ -919,7 +935,7 @@ async function appendFileInRoot(
   await using cleanup = {
     async [Symbol.asyncDispose]() {
       if (!dispatched && target.createdForWrite) {
-        await removePathIfIdentityUnchanged(target.realPath, target.stat);
+        await removePathIfIdentityUnchanged(target.realPath, identity);
       }
     },
   };
@@ -1217,18 +1233,6 @@ async function copyFileInRoot(
   }
 }
 
-async function removePathIfIdentityUnchanged(
-  targetPath: string,
-  identity: FileIdentityStat,
-): Promise<void> {
-  const parentGuard = await createAsyncDirectoryGuard(path.dirname(targetPath));
-  await withAsyncDirectoryGuards([parentGuard], async () => {
-    const current = fsSync.lstatSync(targetPath);
-    if (current.isSymbolicLink() || !sameFileIdentityForCleanup(current, identity)) return;
-    await fs.unlink(targetPath);
-  });
-}
-
 async function resolvePinnedPathInRoot(
   root: RootContext,
   params: {
@@ -1484,7 +1488,7 @@ async function writeFileFallbackUnlocked(
     return;
   }
 
-  const target = await openWritableFileInRoot(root, {
+  const { opened: target, identity: targetIdentity } = await openWritableFileInRoot(root, {
     relativePath: params.relativePath,
     mkdir: params.mkdir,
     // Private, writable placeholder: Windows cannot rename over a read-only file.
@@ -1515,7 +1519,7 @@ async function writeFileFallbackUnlocked(
   let placeholderIdentity: BigIntStats | undefined;
   let published = false;
   try {
-    if (target.createdForWrite) placeholderIdentity = fsSync.fstatSync(target.handle.fd, { bigint: true });
+    if (target.createdForWrite) placeholderIdentity = targetIdentity;
     tempPath = buildAtomicWriteTempPath(destinationPath);
     if (retainedSelection) {
       await refreshRetainedRootWriteAdmission(root, retainedSelection, true, target.handle.fd);

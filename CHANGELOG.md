@@ -9,6 +9,7 @@
 
 ### Security
 
+- Verify writable-file admission and post-open identity using private bigint receipts while retaining the public numeric Stats contract.
 - Bind secure temporary-directory mode repairs to no-follow descriptors and exact pathname identity, preserving concurrent replacements and failing closed on unverifiable repair.
 - Snapshot borrowed-file transfer options before I/O while retaining the original cancellation signal, mutation authority, and progress callbacks through partial writes.
 - Validate descriptor-bound Darwin ACL facts before clone admission and publication, correctly handling absent ACLs and rejecting unsafe staging states.
