@@ -12,6 +12,7 @@
 - Cap configurable-depth suffix probing at 32,768 forward observations while always completing owned cleanup.
 - Allow asynchronous `include`/`descend` in `walkDirectory()` and `entryFilter` in `Root.walk()` for serial selection and marker-based pruning, retaining callback receivers and budgets; Root walks settle pending callbacks and recheck cancellation and directory/root identity before using awaited decisions.
 - Expand security-owner review coverage to native and archive code, platform packages, executable benchmarks, and root build, test, workspace, and release-policy configuration.
+- Add `copyFileDescriptorSync()` for bounded positional transfers between caller-owned regular-file descriptors, sharing `CopyFileHandleOptions` while preserving cursors, descriptor lifetime, destination suffixes, and caller-owned durability and publication.
 
 ### Atomic replacement
 
