@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 
@@ -19,4 +20,27 @@ export function nativeBinaryLoaded(binary, sharedObjects = process.report.getRep
   const expected = realpathSync.native(binary);
   return sharedObjects.filter((file) => file.endsWith(".node"))
     .some((file) => realpathSync.native(file) === expected);
+}
+
+export function assertInstalledScriptPath(observed, verifiedCanonicalScript) {
+  // Windows short names can reach the same asset through a different spelling.
+  assert.equal(realpathSync.native(observed), verifiedCanonicalScript,
+    "production helper must execute the verified installed script");
+}
+
+const windowsFixtureSteps = new Set([
+  "script:start", "add-type:start", "add-type:end", "get-acl:start", "get-acl:end",
+  "set-acl:start", "set-acl:end", "raw-security:start", "raw-security:end", "output:start", "output:end",
+]);
+
+export function windowsSecurityFixturePhases(stderr) {
+  if (typeof stderr !== "string") return [];
+  const phases = [];
+  const markers = /^FS_SAFE_SECURITY_FIXTURE:([a-z-]+:(?:start|end)):(\d{1,9})\r?$/gm;
+  for (const match of stderr.slice(0, 1024 * 1024).matchAll(markers)) {
+    if (!windowsFixtureSteps.has(match[1])) continue;
+    phases.push({ step: match[1], childElapsedMs: Number(match[2]) });
+    if (phases.length === 16) break;
+  }
+  return phases;
 }
