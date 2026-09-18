@@ -14,20 +14,22 @@ use windows_sys::Win32::Foundation::{
     GENERIC_READ, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+    BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
     FILE_ATTRIBUTE_TAG_INFO, FILE_DISPOSITION_FLAG_DELETE,
     FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE, FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
     FILE_DISPOSITION_INFO_EX, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_ID_BOTH_DIR_INFO,
     FILE_ID_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileAttributeTagInfo,
     FileDispositionInfoEx, FileIdBothDirectoryInfo, FileIdBothDirectoryRestartInfo, FileIdInfo,
-    GetFileInformationByHandle, GetFileInformationByHandleEx, ReOpenFile,
+    GetFileInformationByHandle, GetFileInformationByHandleEx, OPEN_EXISTING, ReOpenFile,
     SetFileInformationByHandle,
 };
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
-use crate::{FileIdentity, NativeResult, native_error};
+use crate::{
+    ExactFileIdentity, FileIdentity, NativeResult, RENAME_SOURCE_IDENTITY_MISMATCH, native_error,
+};
 
 const O_WRONLY: i32 = 0x0001;
 const O_RDWR: i32 = 0x0002;
@@ -111,6 +113,57 @@ unsafe extern "system" {
 }
 
 pub(crate) struct OwnedHandle(pub(crate) HANDLE);
+
+pub(crate) fn open_existing_handle(
+    path: &[u16],
+    access: u32,
+    flags: u32,
+    error: impl FnOnce(u32) -> napi::Error<String>,
+) -> NativeResult<OwnedHandle> {
+    if path.last() != Some(&0) {
+        return Err(native_error(
+            "EINVAL",
+            "Windows handle path must be NUL-terminated",
+        ));
+    }
+    // SAFETY: the borrowed path contains a terminator and remains live through the call.
+    let handle = unsafe {
+        CreateFileW(
+            path.as_ptr(),
+            access,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            null(),
+            OPEN_EXISTING,
+            flags,
+            null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(error(unsafe { GetLastError() }));
+    }
+    Ok(OwnedHandle(handle))
+}
+
+pub(crate) fn duplicate_handle(handle: HANDLE, operation: &str) -> NativeResult<OwnedHandle> {
+    let process = unsafe { GetCurrentProcess() };
+    let mut duplicate = null_mut();
+    // SAFETY: the process pseudo-handle and output pointer remain valid through duplication.
+    if unsafe {
+        DuplicateHandle(
+            process,
+            handle,
+            process,
+            &mut duplicate,
+            0,
+            0,
+            DUPLICATE_SAME_ACCESS,
+        )
+    } == 0
+    {
+        return Err(win_error(unsafe { GetLastError() }, operation));
+    }
+    Ok(OwnedHandle(duplicate))
+}
 
 impl Drop for OwnedHandle {
     fn drop(&mut self) {
@@ -596,26 +649,7 @@ pub fn open_beneath(root_fd: i32, rel_path: &str, flags: i32) -> NativeResult<i3
     bridge.require_close()?;
     let root = runtime_handle_from_fd(root_fd, bridge)?;
     if rel_path.is_empty() || rel_path == "." {
-        let process = unsafe { GetCurrentProcess() };
-        let mut duplicate = null_mut();
-        if unsafe {
-            DuplicateHandle(
-                process,
-                root,
-                process,
-                &mut duplicate,
-                0,
-                0,
-                DUPLICATE_SAME_ACCESS,
-            )
-        } == 0
-        {
-            return Err(win_error(
-                unsafe { GetLastError() },
-                "duplicate root handle",
-            ));
-        }
-        let duplicate = OwnedHandle(duplicate);
+        let duplicate = duplicate_handle(root, "duplicate root handle")?;
         assert_not_reparse(duplicate.0)?;
         return runtime_fd_from_handle_with_bridge(duplicate, bridge);
     }
@@ -738,12 +772,10 @@ fn set_rename_information(
         )
     };
     if status < 0 {
-        if !replace
-            && nt_open_relative(target_root, target_path, FILE_READ_ATTRIBUTES, FILE_OPEN, 0)
-                .is_ok()
-        {
-            return Err(native_error("EEXIST", "rename destination already exists"));
-        }
+        // The target may exist because this rename was refused, because it was
+        // committed before an acknowledgement failed, or because another actor
+        // created it. Only the NTSTATUS conversion may classify a collision;
+        // a second pathname observation cannot prove an uncommitted outcome.
         return Err(rename_nt_error(status, operation));
     }
     Ok(())
@@ -825,6 +857,33 @@ pub fn rename_no_replace(
     target_rel_path: &str,
 ) -> NativeResult<()> {
     let source = open_source_for_rename(root_handle(source_root_fd)?, source_rel_path)?;
+    set_rename_information(
+        source.0,
+        root_handle(target_root_fd)?,
+        target_rel_path,
+        false,
+        "rename without replacement",
+    )
+}
+
+pub fn rename_no_replace_with_identity(
+    source_root_fd: i32,
+    source_rel_path: &str,
+    target_root_fd: i32,
+    target_rel_path: &str,
+    expected_source_identity: ExactFileIdentity,
+) -> NativeResult<()> {
+    let source = open_source_for_rename(root_handle(source_root_fd)?, source_rel_path)?;
+    let (dev, ino, _) = handle_identity(source.0)?;
+    if u64::from(dev) != expected_source_identity.dev || ino != expected_source_identity.ino {
+        // This internal-only code is emitted before the mutating syscall, so
+        // retained replacement can distinguish a definitely uncommitted fence
+        // rejection from an arbitrary path-mismatch-shaped native failure.
+        return Err(native_error(
+            RENAME_SOURCE_IDENTITY_MISMATCH,
+            "rename source identity changed before mutation",
+        ));
+    }
     set_rename_information(
         source.0,
         root_handle(target_root_fd)?,
@@ -1669,6 +1728,18 @@ mod tests {
             rename_win_error(ERROR_DISK_FULL, "rename file").status,
             "ENOSPC"
         );
+        for (code, expected) in [
+            (ERROR_FILE_EXISTS, "EEXIST"),
+            (ERROR_ALREADY_EXISTS, "EEXIST"),
+            (ERROR_ACCESS_DENIED, "EPERM"),
+            (ERROR_SHARING_VIOLATION, "EBUSY"),
+        ] {
+            assert_eq!(
+                rename_win_error(code, "rename file").status,
+                expected,
+                "Windows error {code} must retain its own rename outcome"
+            );
+        }
     }
 
     #[test]

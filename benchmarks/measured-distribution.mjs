@@ -13,11 +13,29 @@ import {
   validateSyncCopyFallbackAdmissionReport,
   validateSyncCopyFallbackAdmissionWorkloadResult,
 } from "./sync-copy-fallback-admission.mjs";
+import {
+  validatePublicZipExtractionReport,
+  validatePublicZipExtractionWorkloadResult,
+} from "./public-zip-extraction-contract.mjs";
 import { validateGuestBenchmarkReport } from "./guest.mjs";
 import {
   validateCopyFallbackSuccessReport,
   validateCopyFallbackSuccessWorkloadResult,
 } from "./copy-fallback-success.mjs";
+import {
+  validateAtomicTempSettlementReport,
+  validateAtomicTempSettlementWorkloadResult,
+} from "./atomic-temp-settlement.mjs";
+import {
+  validateCopyTreeSuccessReport,
+  validateCopyTreeSuccessWorkloadResult,
+  validateProbeTreeSuccessReport,
+  validateProbeTreeSuccessWorkloadResult,
+} from "./copy-tree-success.mjs";
+import {
+  validateWindowsOwnerCaughtFailureReport,
+  validateWindowsOwnerCaughtFailureResult,
+} from "./windows-owner-caught-failure.mjs";
 
 const SHA1 = /^[0-9a-f]{40}$/u;
 const SHA256 = /^[0-9a-f]{64}$/u;
@@ -157,10 +175,24 @@ export function validateMeasuredDistribution(plan, reportPlan, report, expectedD
     validateSidecarPathSnapshotWorkloadResult(result);
     validateCopyFallbackSuccessWorkloadResult(result);
     validateSyncCopyFallbackAdmissionWorkloadResult(result);
+    validatePublicZipExtractionWorkloadResult(result);
+    validateAtomicTempSettlementWorkloadResult(result);
+    validateCopyTreeSuccessWorkloadResult(result);
+    validateProbeTreeSuccessWorkloadResult(result);
+    validateWindowsOwnerCaughtFailureResult(result);
   }
   validateSidecarPathSnapshotReport(report, plan.settings.filter, plan.settings.iterations);
   validateCopyFallbackSuccessReport(report, plan.settings.filter, plan.settings.iterations);
   validateSyncCopyFallbackAdmissionReport(report, plan.settings.filter, plan.settings.iterations);
+  validatePublicZipExtractionReport(report, plan.settings.filter, plan.settings.iterations);
+  validateAtomicTempSettlementReport(report, plan.settings.filter);
+  validateProbeTreeSuccessReport(report, plan.settings.filter, plan.settings.iterations);
+  validateCopyTreeSuccessReport(report, plan.settings.filter, plan.settings.iterations);
+  validateWindowsOwnerCaughtFailureReport(
+    report,
+    plan.settings.filter,
+    plan.settings.iterations,
+  );
 }
 
 export const MEASURED_SOURCE_ARGUMENT_NAMES = Object.freeze(

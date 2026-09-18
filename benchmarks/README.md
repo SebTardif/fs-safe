@@ -39,6 +39,45 @@ cases exclude later close/release, which have their own rows. Representative
 payload assertions run outside measurement. Reads cover 128 B, 64 KiB, 1 MiB,
 2 MiB, the default Root budget of 16 MiB, and an explicit 32 MiB budget;
 writes compare both durability settings without changing package defaults.
+The `temp-settlement` rows exercise successful public async and sync atomic
+replacement plus synchronous store writes with 32-byte and 1 MiB payloads,
+default and explicit durability behavior, and both existing and missing targets.
+Each row owns a unique fixture directory. Setup first proves that no sibling temp
+is present; every invocation then verifies the returned method or path, exact
+published bytes, applicable POSIX mode, and absence of orphan temps before reset.
+Only the public write call is timed. These immutable workload receipts are
+validated against the complete predeclared row set selected by the report filter.
+Eight `windows-owner-caught` rows bind the Windows owner diagnostic study to an
+immutable workload receipt. Six `inspectWindowsAcl` rows use injected,
+prebuilt executors for empty and populated DACL success, ordinary `Error`, raw
+command failure with `Buffer` stderr, wrapped timeout, and malformed JSON.
+The runner workspace must already have its private Windows ACL before these
+rows register or create their child fixture. The normal runner establishes that
+precondition in `registerCore()` via `applyBenchmarkPrivateWindowsAcl()`; any
+standalone registration must call the same helper first. A failed ACL setup is
+a failed campaign job, not a skipped or substituted control.
+Source cohorts run at the configured iteration count. An
+`inspectPathPermissions` Windows-policy control uses the native reader on a
+native Windows run and otherwise consumes prebuilt descriptor facts, proving
+the route by an exact injected-executor call count. A forced-POSIX policy
+control covers the other branch. Both controls run at one twentieth of the
+configured count. Fixture creation, content checks, exact result/cause/detail
+checks, and executor call counts stay outside timing; no row skips on a
+supported campaign platform or native mode.
+
+Hostile values are correctness-only because the repair deliberately changes
+their public outcome from a rejected inspector to an unverified result; they
+are declared in the receipt and are not subtracted from timings or substituted
+for an equivalent cohort. For the final study use filter
+`windows-owner-caught`, 20 iterations, nine samples, three blocks, both ABBA
+and BAAB orders, Node 22 and 24, native modes `off` and `require`, and Linux,
+macOS, and Windows. Every declared job, row, block, and pooled comparison must
+finish; controls cannot cancel a source regression or be selectively rerun.
+Run the source comparison and separate same-source-rebuild and same-artifact
+controls serially. For each block and the pooled result, fail a row when its
+median regresses by more than 10% or 50 microseconds, or its maximum sample
+average regresses by more than 20% or 100 microseconds; a failing control blocks
+the campaign and never offsets a source result.
 Thirty-six synchronous file-store directory-mode rows cross existing matching,
 existing mismatched, and wholly new directory chains at depths 0/4/16 with both
 durability and private-mode settings. Fixture creation, mode setup, verification,
@@ -144,6 +183,42 @@ not presented as an equivalent callback workload.
 Directory iteration includes full and early-stop scans in filesystem and sorted
 order. Tree-copy cases use explicit auto, never, and supported always policies
 over 64 small files, one 1 MiB file, and nested and empty directories.
+Four additional no-skip public `copyTree` rows bind terminal close-settlement
+costs to immutable receipts at concurrency two: 32 nested 4 KiB files and a
+2 MiB-plus-17-byte multichunk file, each with `clone: "never"` and `"auto"`.
+Native-off `"auto"` rows are admitted as verified JavaScript byte fallbacks;
+other automatic modes record the probed backend as capability evidence and
+leave the actual clone-or-copy route unverified. A receipt-bound `probeTreeClone` success row distinguishes the
+native parent-open/close path from the native-disabled short circuit.
+Source construction and checks for exact paths, SHA-256 content, POSIX mode,
+mtime, POSIX relative symlink or Windows absolute junction spelling and target,
+destination independence, source preservation, and target cleanup stay outside
+timing. Report admission requires the exact selected rows, no skips, unchanged
+receipts, configured native mode, and divisor-adjusted iteration counts.
+
+The final close-settlement study is predeclared as two separate focused
+campaigns and remains queued behind any active campaign; this change does not
+start it. Both use Linux, macOS, and Windows with Node 22 and 24, three blocks,
+nine samples, and complete separate `order=abba` and `order=baab` dispatches.
+The portable campaign uses the exact filter `copyTree/settled-success/`, native
+mode `off`, and `iterations=900`, yielding exactly nine calls per sample for
+each of the four divisor-100 rows. Thus both `clone: "never"` and `"auto"`
+traverse the admitted JavaScript byte fallback. The probe campaign uses the
+exact filter `probeTreeClone`, native mode `require`, and `iterations=1000` on
+supported native jobs; its receipt must say `native-probe-parent-open-close`,
+not the native-disabled short circuit. Every matrix job and selected row must
+finish.
+
+Each campaign runs the exact candidate against frozen main as the source
+comparison, then repeats the identical matrix with the candidate revision as
+separate same-source rebuilds and as one shared same-artifact build. In every
+complete block and in the pooled distribution, a median increase greater than
+10% or 50 microseconds fails, as does a maximum sample-average increase greater
+than 20% or 100 microseconds. A control failure blocks the source result and
+never offsets it. No samples or rows are excluded or subtracted, and no
+selective reruns are admitted; an invalid cell requires repeating the entire
+frozen campaign.
+
 The `movePathWithCopyFallback/forced-copy` rows use `sourceHardlinks: "reject"`
 to measure complete staged directory copies and source cleanup on one filesystem.
 An empty-directory row measures the smallest operation. Wide and deep trees
@@ -174,6 +249,13 @@ Deterministic Rust tests separately check cancellation between raw input reads.
 ZIP reads and extraction also cover 1 MiB and 16 MiB stored and deflated members
 to expose payload integrity costs beyond tiny archive fixtures. ZIP admission and
 member reads also cover 512 ASCII and Unicode names with stored and deflated data.
+The existing `extractArchive/zip` row is a receipt-bound successful public call:
+its immutable workload metadata records the archive shape, outcome, options,
+timed boundary, and verification contract. Every invocation asserts its empty
+destination before timing, times only `extractArchive()`, then verifies the exact
+entry set and parsed payload and removes the entry after timing. Use `--mode off`
+to compare the portable ZIP path; the method-audit report separately binds the
+exact source, distribution, harness, runtime, filesystem, and selected mode.
 Preflight rows verify the decoded file kinds as well as entry counts. Three
 `zip-512-mixed-kinds` rows cover preflight, bounded reads, and filtered extraction
 with 256 directories and 256 files, including physical-to-decoder kind association.

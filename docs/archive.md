@@ -153,14 +153,24 @@ must agree with this kind, physical index, size, known path, and UNIX-creator mo
 before extraction or any member read. Bounded ZIP reads retain this metadata from
 their single admission pass without another input copy or scan.
 
-Portable ZIP preflight, extraction, and reads also check the decoded kind against
-admission. Unsupported JSZip metadata rejects with `ArchiveFormatError` before
-filters, including UNIX-only directory attributes without a terminal slash or DOS
-directory bit, backslash-only directory names without directory attributes, and
-non-UNIX creators whose high-word symlink mode JSZip does not expose. Symlinks that
-the decoder represents faithfully remain subject to the existing filter and
-blocked-link policy. UNIX creator metadata and permission defaults remain as
-described above.
+Portable ZIP preflight, extraction, and reads bind every decoder insertion to
+its admitted physical record before JSZip can coerce its type or discard its
+payload. Names, physical order, original directory/permission metadata,
+compression method, compressed and decoded sizes, and CRC must agree. The
+private loader then applies the admitted kind, preserving UNIX-only directory
+attributes, backslash-only directories, and high-word symlinks from any creator.
+Symlinks remain subject to the existing filter and blocked-link policy.
+UNIX socket and block-device type bits do not turn regular-file payloads into
+empty directories. Directory and symlink callbacks receive their physical
+declared sizes; directory bodies are not published as files. Unsupported
+link-like types remain visible as `other` and are safely omitted when accepted.
+UNIX creator metadata and permission defaults remain as described above.
+
+The loader adapter belongs to one private JSZip instance and is removed after
+loading, including failure. Public preflight still returns ordinary JSZip entry
+objects, with directory keys ending in `/` and recognizable symlink type bits.
+Compressed data is retained even for declared-zero entries, so an empty-size
+claim cannot bypass payload-size or CRC verification during extraction or reads.
 
 Within one ZIP entry, identical local and central name bytes reuse the same
 decoded validation. Unicode Path admission is shared only when both the raw names
@@ -274,11 +284,23 @@ A failure before publication preserves a pre-existing file, and rejection does
 not grant authority to delete a substituted file or alias. Failed extraction does not
 restore overwritten contents. Active destination mutations and their guarded
 cleanup still finish before rejection; no later destination mutation begins.
+Portable ZIP output is not eligible for publication until its stream closes or
+the defensive `FileHandle` close succeeds. If that fallback close rejects,
+`extractArchive()` propagates the error and publishes no entry from the staged
+tree. Cleanup retains its best-effort `FileHandle` close; it does not transfer
+the descriptor to a raw or native closer.
 New directories whose finalization was never reached can retain their
 private working mode after failure. Failure cleanup closes retained descriptors;
 it does not run a cleanup chmod sweep or roll back the archive. The public merge
 helper still derives modes from its external source tree and must be able to
 read that source; it never chmods an unreadable external source to admit it.
+It retains the source root and each active child directory's exact identity
+through traversal and copy verification. Each source file is opened once,
+admitted against that root and its earlier exact identity observation, and
+copied from the admitted descriptor; public file modes use that descriptor's
+ordinary permission bits. Replacing a source ancestor or leaf rejects the
+merge before replacement bytes can be published. These checks do not provide
+a snapshot against writes to the same source inode.
 That helper retains per-copy durability and immediate postorder directory-mode
 finalization; the deferred pass described above belongs to `extractArchive()`.
 

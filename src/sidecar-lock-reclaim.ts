@@ -4,11 +4,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { readFileDescriptorBoundedSync, readFileHandleBounded } from "./bounded-read.js";
 import { FsSafeError } from "./errors.js";
-import { sameFileIdentity } from "./file-identity.js";
+import { sameFileIdentity, sameFileIdentityForCleanup } from "./file-identity.js";
 import { resolveReadOpenFlags } from "./read-open-flags.js";
 import type { Root } from "./root-impl.js";
 import { openSidecarRoot } from "./sidecar-lock-root.js";
 import { getFsSafeTestHooks } from "./test-hooks.js";
+import { sidecarExclusiveCreate } from "./root-create-input.js";
 
 const MAX_LOCK_PAYLOAD_BYTES = 1024 * 1024;
 
@@ -253,9 +254,13 @@ export function readSidecarLockRawSnapshotSync(
 export function removeSidecarLockIfUnchangedSync(
   lockPath: string,
   observed: SidecarLockSnapshot,
+  assertAuthorized?: () => void,
 ): boolean {
+  assertAuthorized?.();
   const current = readSidecarLockSnapshotSync(lockPath);
+  assertAuthorized?.();
   if (!current || !sidecarLockSnapshotMatches(current, observed)) return false;
+  assertAuthorized?.();
   fsSync.rmSync(lockPath);
   return true;
 }
@@ -274,7 +279,11 @@ export function sidecarLockSnapshotMatches(
       current.raw === observed.raw
     );
   }
-  if (observed.stat && current.stat && !sameFileIdentity(observed.stat, current.stat)) {
+  if (
+    observed.stat &&
+    current.stat &&
+    !sameFileIdentityForCleanup(observed.stat, current.stat)
+  ) {
     return false;
   }
   if (observed.raw !== undefined) {
@@ -315,40 +324,72 @@ export async function sidecarLockSnapshotStillPresent(
   return !!current && !!observed && sidecarLockSnapshotMatches(current, observed);
 }
 
-export async function sidecarReclaimGuardExists(pathname: string): Promise<boolean> {
+export type SidecarReclaimGuard = {
+  assertHeld?(): Promise<void>;
+  release(): Promise<void>;
+};
+
+export async function sidecarReclaimGuardExists(pathname: string, lockRoot?: Root): Promise<boolean> {
   try {
-    fsSync.lstatSync(pathname);
+    if (lockRoot) await lockRoot.stat(relativeSidecarLockPath(lockRoot, pathname));
+    else fsSync.lstatSync(pathname);
     return true;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
-    }
-    throw err;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT" || (lockRoot && code === "not-found")) return false;
+    throw error;
   }
 }
 
 export async function tryAcquireSidecarReclaimGuard(
   reclaimGuards: Set<string>,
-  reclaimGuardPath: string,
-): Promise<boolean> {
-  try {
-    await fs.mkdir(reclaimGuardPath);
-    reclaimGuards.add(reclaimGuardPath);
-    return true;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-      return false;
+  pathname: string,
+  lockRoot?: Root,
+): Promise<SidecarReclaimGuard | undefined> {
+  if (lockRoot) {
+    const relative = relativeSidecarLockPath(lockRoot, pathname);
+    const payload = { pid: process.pid, createdAt: new Date().toISOString() };
+    const snapshot = { ...serializeSidecarLockPayload(payload), payload };
+    try {
+      await lockRoot.create(relative, snapshot.raw, { ...sidecarExclusiveCreate, mkdir: false, mode: 0o600, durable: false });
+    } catch (error) {
+      if (error instanceof FsSafeError && error.code === "already-exists") return;
+      // A raw reclaimer can create its directory after our occupancy check.
+      if (error instanceof FsSafeError && error.code === "not-file") {
+        await sidecarReclaimGuardExists(pathname, lockRoot);
+        return;
+      }
+      throw error;
     }
-    throw err;
+    // This attempt owns only its minted token and exact bytes. Root guards
+    // never enter raw exit cleanup; interrupted/ambiguous operations preserve them.
+    let released = false;
+    const changed = () => new FsSafeError("path-mismatch", "sidecar reclaim guard ownership changed");
+    return {
+      async assertHeld() {
+        if (released || !await sidecarLockSnapshotStillPresent(pathname, snapshot, { lockRoot })) throw changed();
+      },
+      async release() {
+        if (released) return;
+        if (!await removeSidecarLockIfUnchanged(pathname, snapshot, { lockRoot })) throw changed();
+        released = true;
+      },
+    };
   }
-}
-
-export async function releaseSidecarReclaimGuard(
-  reclaimGuards: Set<string>,
-  reclaimGuardPath: string,
-): Promise<void> {
-  await fs.rmdir(reclaimGuardPath);
-  reclaimGuards.delete(reclaimGuardPath);
+  try {
+    await fs.mkdir(pathname);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "EEXIST") return;
+    throw error;
+  }
+  reclaimGuards.add(pathname);
+  let released = false;
+  return { async release() {
+    if (released) return;
+    await fs.rmdir(pathname);
+    reclaimGuards.delete(pathname);
+    released = true;
+  } };
 }
 
 export async function removeStaleSidecarLockIfAllowed(params: {
@@ -358,12 +399,21 @@ export async function removeStaleSidecarLockIfAllowed(params: {
   shouldRemoveStaleLock?: (snapshot: SidecarLockStaleSnapshot) => boolean | Promise<boolean>;
   lockRoot?: Root;
   parsePayload?: (raw: string) => unknown;
+  assertAuthorized?: () => void;
+  assertGuardHeld?: () => Promise<void>;
 }): Promise<"removed" | "changed" | "not-approved"> {
   if (!params.shouldRemoveStaleLock || params.snapshot.raw === undefined) {
     return "not-approved";
   }
   const ioOptions = { lockRoot: params.lockRoot, parsePayload: params.parsePayload };
-  if (!(await sidecarLockSnapshotStillPresent(params.lockPath, params.snapshot, ioOptions))) {
+  params.assertAuthorized?.();
+  const presentBeforeApproval = await sidecarLockSnapshotStillPresent(
+    params.lockPath,
+    params.snapshot,
+    ioOptions,
+  );
+  params.assertAuthorized?.();
+  if (!presentBeforeApproval) {
     return "changed";
   }
   if (
@@ -376,12 +426,24 @@ export async function removeStaleSidecarLockIfAllowed(params: {
   ) {
     return "not-approved";
   }
-  if (!(await sidecarLockSnapshotStillPresent(params.lockPath, params.snapshot, ioOptions))) {
+  params.assertAuthorized?.();
+  const presentBeforeRemoval = await sidecarLockSnapshotStillPresent(
+    params.lockPath,
+    params.snapshot,
+    ioOptions,
+  );
+  params.assertAuthorized?.();
+  if (!presentBeforeRemoval) {
     return "changed";
   }
+  if (params.assertGuardHeld) await params.assertGuardHeld();
+  params.assertAuthorized?.();
   try {
     if (params.lockRoot) {
-      await params.lockRoot.remove(relativeSidecarLockPath(params.lockRoot, params.lockPath));
+      await params.lockRoot.remove(
+      relativeSidecarLockPath(params.lockRoot, params.lockPath),
+      { assertBeforeMutation: params.assertAuthorized },
+    );
     } else {
       await fs.rm(params.lockPath);
     }

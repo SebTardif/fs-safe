@@ -133,6 +133,13 @@ the published entry intact for caller-owned recovery. Ordinary write-only and
 mode-000 outputs do not require a readable descriptor when pathname metadata is
 available.
 
+If a synchronous write operation and its final temp-descriptor close both fail,
+the store reports them in operation-then-close order in an `AggregateError`.
+This ordering and the original JavaScript thrown value are preserved even when
+that value is `undefined` or otherwise falsy. An unsuccessful best-effort temp
+unlink remains registered for identity-checked process-exit cleanup; it does not
+prevent the close attempt or replace either reportable failure.
+
 If an opaque pathname cannot be reopened because of an ACL denial or sharing
 restriction, the synchronous writer intentionally rejects with `path-mismatch`:
 its exact publication identity cannot be verified. There is no equal-content
@@ -219,6 +226,14 @@ with the same precedence as `write`.
 
 Per-call overrides for the store-level defaults:
 
+Writes capture byte limits, modes, and durability before asynchronous work or
+stream consumption. JSON writes capture those fields and the trailing-newline
+setting before serialization. Later mutation cannot change those captured values.
+Accessors run on the original options object. Ordinary writes retain content
+conversion and byte-limit validation before reading modes and durability.
+The legacy non-private stream `tempPrefix` accessor still runs after staging;
+it does not control the publication policy.
+
 ```ts
 type FileStoreWriteOptions = {
   durable?: boolean;   // store default, otherwise true
@@ -282,6 +297,10 @@ immediately before guarded removal. Fresh replacements and in-place timestamp
 refreshes are preserved; replacements that are themselves expired remain
 eligible. This does not require read permission. The existing best-effort
 external-process race window after dispatch still applies.
+
+Empty-directory pruning likewise rechecks that the selected entry is still a
+directory immediately before guarded removal. File and symlink replacements
+are preserved, and a directory that becomes nonempty is left in place.
 
 ## Difference from `Root`
 

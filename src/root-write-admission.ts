@@ -16,7 +16,7 @@ import {
   snapshotPinnedMutationPolicy,
 } from "./pinned-mutation-admission.js";
 import type { PinnedWriteMutationAdmission } from "./pinned-write.js";
-import { admitPathInsideRoot } from "./root-boundary.js";
+import { admitPathInsideRoot, sameNormalizedPathSpelling } from "./root-boundary.js";
 import type { RootContext } from "./root-context.js";
 import { resolvePathInRoot } from "./root-context.js";
 import { hardlinkedPathNotAllowedError, outsideWorkspaceError } from "./root-errors.js";
@@ -67,15 +67,6 @@ export type RetainedRootWriteSelection = RootWritePathSelection & Readonly<{
   identity: Readonly<Pick<BigIntStats, "dev" | "ino">>;
 }>;
 
-const retainedRootWriteSelections = new WeakMap<object, RetainedRootWriteSelection>();
-
-export function retainRootWriteSelection(
-  owner: object,
-  selection: RetainedRootWriteSelection,
-): void {
-  retainedRootWriteSelections.set(owner, selection);
-}
-
 export function createRootWriteSelectionForFd(
   selection: RootWritePathSelection,
   fd: number,
@@ -85,12 +76,6 @@ export function createRootWriteSelectionForFd(
     ...selection,
     identity: Object.freeze({ dev: stat.dev, ino: stat.ino }),
   });
-}
-
-export function takeRootWriteSelection(owner: object): RetainedRootWriteSelection | undefined {
-  const selection = retainedRootWriteSelections.get(owner);
-  retainedRootWriteSelections.delete(owner);
-  return selection;
 }
 
 function writeSelectionChanged(cause?: unknown): FsSafeError {
@@ -121,12 +106,6 @@ function inspectRegularSelectionPath(
   }
   if (observed.nlink > 1n) throw hardlinkedPathNotAllowedError();
   return observed;
-}
-
-function sameNormalizedPathSpelling(left: string, right: string): boolean {
-  // Windows can expose case-sensitive directories, so normalize separators
-  // and roots without using path.relative's case-folding comparison.
-  return path.resolve(left) === path.resolve(right);
 }
 
 function inspectSelectionBindingSync(

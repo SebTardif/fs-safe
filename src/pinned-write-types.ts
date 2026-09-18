@@ -4,7 +4,7 @@ import type { FileIdentityStat } from "./file-identity.js";
 import type { MutationDirectoryObservation } from "./pinned-mutation-observation.js";
 
 export type PinnedWriteInput =
-  | { kind: "buffer"; data: string | Buffer; encoding?: BufferEncoding }
+  | { kind: "buffer"; data: string | Buffer; encoding?: BufferEncoding; stageBeforePublish?: boolean }
   | { kind: "stream"; stream: AsyncIterable<Uint8Array | string>; stageBeforePublish?: boolean }
   | CopyFileInput;
 
@@ -50,6 +50,7 @@ export type PinnedWriteMutationAdmission = Readonly<{
   rejectParentSymlinks: boolean;
   beginParentWalk?(): string | undefined;
   beginSharedParentWalk?(): PinnedMutationParentWalkSession | undefined;
+  beginNativeParentWalk?(): PinnedMutationParentWalkSession | undefined;
   tryAuthorizeAtParent?(request: Readonly<{
     targetPath: string;
     mutationPath: string;
@@ -88,4 +89,3 @@ export type PinnedWriteParams = {
     parentGuard: AnyAsyncDirectoryGuard,
   ) => Promise<void>;
 };
-

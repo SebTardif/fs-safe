@@ -76,8 +76,7 @@ import {
   resolvePinnedWriteTargetInRoot,
   refreshRetainedRootWriteAdmission,
   refreshRootWritePathSelection,
-  retainRootWriteSelection,
-  takeRootWriteSelection,
+  type RetainedRootWriteSelection,
   type PinnedWriteTarget,
 } from "./root-write-admission.js";
 import { prepareSharedRootWriteTarget } from "./root-write-complete-parent.js";
@@ -87,12 +86,13 @@ import { assertRootFallbackWritePath } from "./root-write-lock-binding.js";
 import { inspectFileIdentity, inspectFileIdentitySync } from "./strict-file-identity.js";
 import { movePathNoReplaceNative } from "./root-move-noreplace.js";
 import { admitRootReadHandle, inspectOpenedPathIdentitySync } from "./root-read-admission.js";
-import { createCopyPublicationObserver, onCopyPublication, type CopyPublicationOptions } from "./copy-publication.js";
+import { createCopyPublicationObserver, onCopyPublication, onCopySourceAdmission, type CopyPublicationOptions } from "./copy-publication.js";
 import { writeAllToFile } from "./write-file-handle.js";
 import { createInputOptions, rethrowCreateInputError, rootWriteInput, type RootWriteParams } from "./root-create-input.js";
 import { assertFinalSymlinkRejected, mutationSymlinkResolution, readSymlinkResolution, type MutationSymlinkPolicy, type SymlinkPolicy } from "./root-symlink-policy.js";
 import { assertNoWindowsPathAlias, resolvePathPreservingWindowsRoot } from "./windows-path-alias.js";
 import { resolvePinnedObservedPathInRoot, type PinnedObservedPath } from "./root-observed-path.js";
+import { registerFileLockSyncRootAdapter } from "./file-lock-sync-root.js";
 
 import {
   mergeReadOptions, readDefaults,
@@ -294,6 +294,7 @@ export class RootHandle implements Root {
     this.rootReal = context.rootReal;
     this.rootWithSep = context.rootWithSep;
     this.defaults = defaults;
+    registerFileLockSyncRootAdapter(this, context, defaults);
   }
 
   private get context(): RootContext {
@@ -506,6 +507,7 @@ export class RootHandle implements Root {
       mode: options.mode ?? this.defaults.mode,
       durable: options.durable ?? this.defaults.durable ?? true,
       verifyPublished: (options as CopyPublicationOptions)[onCopyPublication],
+      admitSource: (options as CopyPublicationOptions)[onCopySourceAdmission],
     }).catch(rethrowMutationAuthorityError);
   }
 
@@ -725,7 +727,7 @@ async function openWritableFileInRoot(
     append?: boolean;
     expectedWritePath?: string;
   },
-): Promise<{ opened: WritableOpenResult; identity: BigIntStats }> {
+): Promise<{ opened: WritableOpenResult; identity: BigIntStats; writeSelection?: RetainedRootWriteSelection }> {
   const guardedTarget = params.denyMutations === undefined && params.mutationSymlinks === undefined
     ? undefined
     : await resolveGuardedWriteTargetInRoot(root, {
@@ -904,8 +906,7 @@ async function openWritableFileInRoot(
       stat,
       [Symbol.asyncDispose]: () => handle.close().catch(() => undefined),
     };
-    if (writeSelection) retainRootWriteSelection(result, writeSelection);
-    return { opened: result, identity };
+    return { opened: result, identity, writeSelection };
   } catch (err) {
     const cleanupCreatedPath = createdForWrite && err instanceof FsSafeError;
     const cleanupPath = realPathForCleanup ?? ioPath;
@@ -1148,6 +1149,7 @@ async function copyFileInRoot(
     source: RootCopySource;
     relativePath: string;
     verifyPublished?: CopyPublicationOptions[typeof onCopyPublication];
+    admitSource?: CopyPublicationOptions[typeof onCopySourceAdmission];
   },
 ): Promise<void> {
   params.signal?.throwIfAborted();
@@ -1178,11 +1180,13 @@ async function copyFileInRoot(
   }
 
   try {
+    const sourceAdmission = params.admitSource?.(sourceIdentity, source.realPath);
+    const mode = sourceAdmission?.mode ?? params.mode;
     await serializePathWrite(rootWriteQueueKey(root, params.relativePath), async () => {
       const pinned = await resolvePinnedWriteTargetInRoot(
         root,
         params.relativePath,
-        params.mode ?? (params.preserveSourceMode ? Number(sourceIdentity.mode & 0o7777n) : undefined),
+        mode ?? (params.preserveSourceMode ? Number(sourceIdentity.mode & 0o7777n) : undefined),
         params.denyMutations,
         params.overwrite !== false,
         params.mutationSymlinks,
@@ -1191,6 +1195,8 @@ async function copyFileInRoot(
         await assertCopySourceCurrent(source, sourceIdentity);
         const verifySource = async () => {
           params.signal?.throwIfAborted();
+          try { sourceAdmission?.verify(); }
+          catch (error) { throw new MutationAuthorityError(error); }
           if (typeof params.source !== "string") {
             await params.source.root.stat(".");
           }
@@ -1208,10 +1214,10 @@ async function copyFileInRoot(
             rejectFinalSymlink: params.mutationSymlinks !== undefined,
             maxBytes: params.maxBytes,
             sync: params.durable !== false,
-            assertBeforeMutation: () => {
+            assertBeforeMutation: params.signal || params.assertBeforeMutation ? () => {
               if (params.signal?.aborted) throw new MutationAuthorityError(params.signal.reason);
               params.assertBeforeMutation?.();
-            },
+            } : undefined,
             verifyPublished: params.verifyPublished,
             onPublished: observer.onPublished,
             input: { kind: "file", handle: source.handle, size: source.stat.size, clone, signal: params.signal, verifySource },
@@ -1489,7 +1495,7 @@ async function writeFileFallbackUnlocked(
     return;
   }
 
-  const { opened: target, identity: targetIdentity } = await openWritableFileInRoot(root, {
+  const { opened: target, identity: targetIdentity, writeSelection: retainedSelection } = await openWritableFileInRoot(root, {
     relativePath: params.relativePath,
     mkdir: params.mkdir,
     // Private, writable placeholder: Windows cannot rename over a read-only file.
@@ -1501,7 +1507,6 @@ async function writeFileFallbackUnlocked(
     expectedWritePath,
   });
   const policyEnabled = params.denyMutations !== undefined || params.mutationSymlinks !== undefined;
-  const retainedSelection = policyEnabled ? takeRootWriteSelection(target) : undefined;
   const destinationPath = retainedSelection?.selectedPath ?? target.realPath;
   const mode = params.mode ?? (target.stat.mode & 0o777);
   if (policyEnabled && !retainedSelection) {
