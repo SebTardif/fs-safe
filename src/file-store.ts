@@ -450,10 +450,11 @@ export function fileStoreSync(options: FileStoreOptions): FileStoreSync {
     });
   }
 
+  let readTextIfExists: FileStoreSync["readTextIfExists"];
   return {
     rootDir,
     path: (relativePath) => resolveStorePath(rootDir, relativePath),
-    readTextIfExists: (relativePath, readOptions) => {
+    readTextIfExists: readTextIfExists = (relativePath, readOptions) => {
       const limit = normalizeMaxBytes(readOptions?.maxBytes, { defaultValue: maxBytes });
       const targetPath = resolveStorePath(rootDir, relativePath);
       const opened = openRootFileSync({
@@ -479,8 +480,7 @@ export function fileStoreSync(options: FileStoreOptions): FileStoreSync {
       }
     },
     readJsonIfExists: <T = unknown>(relativePath: string, readOptions?: { maxBytes?: number }) => {
-      const raw = fileStoreSync({ rootDir, private: privateMode, dirMode, mode, maxBytes })
-        .readTextIfExists(relativePath, readOptions);
+      const raw = readTextIfExists(relativePath, readOptions);
       return raw === null ? null : (JSON.parse(raw) as T);
     },
     write,
