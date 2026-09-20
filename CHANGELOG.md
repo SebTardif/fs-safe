@@ -26,6 +26,7 @@
 - Reuse synchronous store JSON readers and resolve queue filesystem roots directly, avoiding repeated store construction and discarded common-ancestor scans while retaining per-call file admission and directory durability checks.
 - Allow package validation with Corepack's native pnpm 12 launcher while continuing to reject shell launchers and implicit PATH substitutions.
 - Compare exact source, destination, and parent-directory identities in atomic copy fallback and mode admission, rejecting rounded inode collisions while removing duplicate source metadata reads.
+- Reduce repeated string scans for legacy install-name sanitization and ASCII filename byte budgets, preserving encoded names, Unicode normalization limits, and archive path admission.
 
 ## 0.16.0 - 2026-09-19
 
