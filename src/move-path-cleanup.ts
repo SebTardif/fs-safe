@@ -5,15 +5,9 @@ import { FsSafeError } from "./errors.js";
 import { inspectDirectoryIdentitySync } from "./directory-guard.js";
 import { inspectFileIdentitySync } from "./strict-file-identity.js";
 
-export type EntryIdentity = {
-  ctimeMs: number;
-  dev: number;
-  ino: number;
-  mode: number;
-  mtimeMs: number;
-  nlink: number;
-  size: number;
-};
+export type EntryIdentity = Readonly<Pick<fsSync.BigIntStats,
+  "ctimeNs" | "dev" | "ino" | "mode" | "mtimeNs" | "nlink" | "size"
+>>;
 
 export type CopiedEntryManifest =
   | (EntryIdentity & {
@@ -35,21 +29,13 @@ export type CleanupCopiedEntryState = {
   aliasGroups: Map<string, CleanupAliasGroup>;
 };
 
-export function entryIdentity(stat: {
-  ctimeMs: number;
-  dev: number;
-  ino: number;
-  mode: number;
-  mtimeMs: number;
-  nlink: number;
-  size: number;
-}): EntryIdentity {
+export function entryIdentity(stat: EntryIdentity): EntryIdentity {
   return {
-    ctimeMs: stat.ctimeMs,
+    ctimeNs: stat.ctimeNs,
     dev: stat.dev,
     ino: stat.ino,
     mode: stat.mode,
-    mtimeMs: stat.mtimeMs,
+    mtimeNs: stat.mtimeNs,
     nlink: stat.nlink,
     size: stat.size,
   };
@@ -62,8 +48,8 @@ export function sameIdentity(a: EntryIdentity, b: EntryIdentity): boolean {
     a.mode === b.mode &&
     a.nlink === b.nlink &&
     a.size === b.size &&
-    a.mtimeMs === b.mtimeMs &&
-    a.ctimeMs === b.ctimeMs
+    a.mtimeNs === b.mtimeNs &&
+    a.ctimeNs === b.ctimeNs
   );
 }
 
@@ -71,6 +57,10 @@ export function sourceChangedError(sourcePath: string): Error {
   return Object.assign(new Error(`Source changed during move fallback: ${sourcePath}`), {
     code: "ESTALE",
   });
+}
+
+export function inspectSourceEntry(sourcePath: string, observe: () => fsSync.BigIntStats): fsSync.BigIntStats {
+  return inspectFileIdentitySync(observe, undefined, process.platform, () => sourceChangedError(sourcePath));
 }
 
 export function inspectSourceDirectory(
@@ -93,7 +83,7 @@ export async function assertSourceStillMatches(
   sourcePath: string,
   identity: EntryIdentity,
 ): Promise<void> {
-  if (!sameIdentity(identity, entryIdentity(fsSync.lstatSync(sourcePath)))) {
+  if (!sameIdentity(identity, inspectSourceEntry(sourcePath, () => fsSync.lstatSync(sourcePath, { bigint: true })))) {
     throw sourceChangedError(sourcePath);
   }
 }
@@ -113,7 +103,7 @@ function collectAliasCandidates(
     }
     return;
   }
-  if (manifest.nlink <= 1) {
+  if (manifest.nlink <= 1n) {
     return;
   }
   const key = identityKey(manifest);
@@ -156,16 +146,27 @@ function sameOwnedUnlinkTransition(before: EntryIdentity, after: EntryIdentity):
     before.ino === after.ino &&
     before.mode === after.mode &&
     before.size === after.size &&
-    before.mtimeMs === after.mtimeMs &&
-    before.nlink > 0 &&
-    after.nlink === before.nlink - 1 &&
-    after.ctimeMs >= before.ctimeMs
+    before.mtimeNs === after.mtimeNs &&
+    before.nlink > 0n &&
+    after.nlink === before.nlink - 1n &&
+    after.ctimeNs >= before.ctimeNs
   );
 }
 
 function poisonAliasGroup(group: CleanupAliasGroup): CleanupCopiedEntryResult {
   group.stale = true;
   return "stale";
+}
+
+function inspectCleanupLeaf(sourcePath: string, expected: EntryIdentity): fsSync.BigIntStats | undefined {
+  let mismatch: Error | undefined;
+  try {
+    return inspectFileIdentitySync(() => fsSync.lstatSync(sourcePath, { bigint: true }), expected,
+      process.platform, () => mismatch = sourceChangedError(sourcePath));
+  } catch (error) {
+    if (mismatch !== undefined && error === mismatch) return undefined;
+    throw error;
+  }
 }
 
 async function observeOwnedAliasUnlink(
@@ -178,20 +179,19 @@ async function observeOwnedAliasUnlink(
     return "removed";
   }
 
-  let observed: Awaited<ReturnType<typeof fs.lstat>>;
+  let observed: fsSync.BigIntStats | undefined;
   try {
-    observed = fsSync.lstatSync(remainingPath);
+    observed = inspectCleanupLeaf(remainingPath, group.expected);
   } catch (error) {
     if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") {
       return poisonAliasGroup(group);
     }
     throw error;
   }
-  const observedIdentity = entryIdentity(observed);
-  if (!sameOwnedUnlinkTransition(group.expected, observedIdentity)) {
+  if (!observed || !sameOwnedUnlinkTransition(group.expected, observed)) {
     return poisonAliasGroup(group);
   }
-  group.expected = observedIdentity;
+  group.expected = entryIdentity(observed);
   return "removed";
 }
 
@@ -275,23 +275,23 @@ export async function cleanupCopiedEntry(
   if (aliasGroup?.stale) {
     return "stale";
   }
-  let currentStat: Awaited<ReturnType<typeof fs.lstat>>;
+  const expected = aliasGroup?.expected ?? manifest;
+  let currentStat: fsSync.BigIntStats | undefined;
   try {
-    currentStat = fsSync.lstatSync(sourcePath);
+    currentStat = inspectCleanupLeaf(sourcePath, expected);
   } catch (error) {
     if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") {
       return aliasGroup ? poisonAliasGroup(aliasGroup) : "removed";
     }
     throw error;
   }
-  const expected = aliasGroup?.expected ?? manifest;
   for (let observation = 0; ; observation++) {
-    if (!sameIdentity(expected, currentStat)) {
+    if (!currentStat || !sameIdentity(expected, currentStat)) {
       return aliasGroup ? poisonAliasGroup(aliasGroup) : "stale";
     }
     if (observation || !assertBeforeMutation) break;
     assertBeforeMutation();
-    currentStat = fsSync.lstatSync(sourcePath);
+    currentStat = inspectCleanupLeaf(sourcePath, expected);
   }
   await fs.unlink(sourcePath);
   return aliasGroup
