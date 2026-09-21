@@ -4,6 +4,7 @@
 
 ### Correctness
 
+- Preserve synchronous secret-read failures and their causes when descriptor cleanup also fails, while continuing to report a lone close failure before validating empty content.
 - Deliver cancellation to tree-copy workers even when a caller's abort handler stops event propagation, preserving caller handlers and waiting for admitted work before descriptor cleanup across native cloning and byte-copy fallbacks.
 - Keep asynchronous atomic admission-pin, parent-sync, and rejected replacement-pin closes best-effort when a filesystem adapter throws synchronously, preserving selected failures and the synchronous helper's close reporting.
 - Preserve asynchronous copy-source results and destination-admission failures when a custom adapter's best-effort close throws synchronously.
