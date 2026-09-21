@@ -5,10 +5,12 @@
 ### Correctness
 
 - Preserve asynchronous copy-source results and destination-admission failures when a custom adapter's best-effort close throws synchronously.
+- Reject Windows permission-query results with missing or nonboolean locality instead of reporting otherwise trusted owners as local.
 
 ### Performance and maintenance
 
 - Retain each Root's originally admitted context across operations while preserving readonly path metadata, live defaults, and root-replacement checks.
+- Reuse inspected data descriptors when formatting Windows permission failures, preserving bounded diagnostics and exact rejected values without duplicate metadata receipts.
 - Allow the durable copy-restoration regression enough time to complete on instrumented Windows CI, retaining all restoration and content assertions.
 - Share guest Python operand admission and descriptor cleanup across filesystem operations while preserving operation-specific exit statuses and failure behavior.
 - Keep native POSIX beneath-open descriptors owned until handoff and share cleanup metadata inspection, preserving platform containment and error behavior.
