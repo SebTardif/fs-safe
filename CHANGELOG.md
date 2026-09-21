@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Correctness
+
+- Preserve directory permission-admission failures when closing the unadopted Node descriptor also fails, while retaining close-error reporting after successful admission.
+- Preserve failed pinned-open admission results when synchronous cleanup also fails, retaining secret-read and root-open errors without changing successful descriptor ownership.
+
 ### Performance and maintenance
 
 - Share Windows native security export dispatch and unsupported-platform errors while preserving argument validation, return types, and diagnostic details.
