@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixes
+
+- **Relative escape checks:** treat both `/` and `\` `..` segments as escapes, including `../secret` on Windows.
+
 ### Performance
 
 - **Native errors:** reduce temporary allocations when constructing fixed filesystem error messages.

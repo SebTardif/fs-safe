@@ -24,6 +24,7 @@ export {
 const NOT_FOUND_CODES = new Set(["ENOENT", "ENOTDIR"]);
 const SYMLINK_OPEN_CODES = new Set(["ELOOP", "EINVAL", "ENOTSUP"]);
 const POSIX_SEPARATOR_CHAR_CODE = 0x2f;
+const RELATIVE_ESCAPE_SEPARATOR = /[/\\]/;
 
 export function normalizeWindowsPathForComparison(input: string): string {
   let normalized = path.win32.normalize(input);
@@ -118,7 +119,16 @@ export function isPathInside(root: string, target: string): boolean {
 }
 
 export function isPathRelativeEscape(relativePath: string): boolean {
-  return relativePath === ".." || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath);
+  // Either separator. path.sep only matches the current platform.
+  if (path.posix.isAbsolute(relativePath) || path.win32.isAbsolute(relativePath)) {
+    return true;
+  }
+  for (const segment of relativePath.split(RELATIVE_ESCAPE_SEPARATOR)) {
+    if (segment === "..") {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function resolveSafeBaseDir(rootDir: string): string {
