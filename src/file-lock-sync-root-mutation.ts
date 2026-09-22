@@ -66,6 +66,7 @@ function ensureParent(pathAuthority: FileLockSyncRootPath): DirectoryReceipt {
       if (!isNotFoundPathError(error)) throw error;
       missing = true;
     }
+    let createdPath: string | undefined;
     if (missing) {
       assertFileLockSyncRootMutationAllowed(next, authority.denyMutations);
       const mutationAuthorityInvoked = invokeFileLockSyncRootMutationAuthority(authority);
@@ -81,14 +82,38 @@ function ensureParent(pathAuthority: FileLockSyncRootPath): DirectoryReceipt {
       if (mutationAuthorityInvoked) {
         assertFileLockSyncRootMutationAllowed(next, authority.denyMutations);
       }
+      // mkdir follows a parent swapped for a symlink after the directory check.
+      // Remember only a directory this call created so a failed identity check
+      // can remove it without deleting a directory that already existed.
+      const filesystemPath = pathForWindowsFilesystem(next);
       try {
-        fs.mkdirSync(pathForWindowsFilesystem(next));
+        fs.mkdirSync(filesystemPath);
+        createdPath = filesystemPath;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       }
     }
-    const nextReceipt = observeDirectory(next, existing);
-    assertDirectoryCurrent(currentReceipt);
+    let nextReceipt: DirectoryReceipt;
+    if (createdPath !== undefined) {
+      try {
+        nextReceipt = observeDirectory(next, existing);
+        assertDirectoryCurrent(currentReceipt);
+      } catch (error) {
+        try {
+          fs.rmdirSync(createdPath);
+        } catch (cleanupError) {
+          throw createSuppressedError(
+            error,
+            cleanupError,
+            "file lock parent admission and cleanup both failed",
+          );
+        }
+        throw error;
+      }
+    } else {
+      nextReceipt = observeDirectory(next, existing);
+      assertDirectoryCurrent(currentReceipt);
+    }
     current = nextReceipt.realPath;
     currentReceipt = nextReceipt;
   }

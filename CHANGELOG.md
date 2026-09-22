@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixes
+
+- **Lock directory creation:** remove a parent directory this call created when the post-create identity check fails, so a symlink swap cannot leave that directory behind.
+
 ### Performance
 
 - **Native errors:** reduce temporary allocations when constructing fixed filesystem error messages.
