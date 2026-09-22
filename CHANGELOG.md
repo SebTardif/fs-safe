@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixes
+
+- **Safe path segments:** reject Windows reserved device names such as CON, NUL, and COM1 before queue files or atomic temp names are joined.
+
 ### Performance
 
 - **Native errors:** reduce temporary allocations when constructing fixed filesystem error messages.
