@@ -80,10 +80,19 @@ describe("sidecar lock ownership tokens", () => {
         staleMs: 1,
         payload: async () => ({ createdAt: new Date().toISOString(), owner: "caller" }),
       });
+      const canonicalLock = fsSync.realpathSync(lockPath);
+      const observesLock = (seen: unknown) => {
+        const value = String(seen);
+        if (value === lockPath || value === canonicalLock) return true;
+        if (process.platform !== "win32") return false;
+        const fold = (item: string) => path.win32.normalize(item).replace(/^\\\\\?\\/, "").toLowerCase();
+        return fold(value) === fold(lockPath) || fold(value) === fold(canonicalLock)
+          || path.win32.basename(value).toLowerCase() === path.win32.basename(lockPath).toLowerCase();
+      };
       const realLstatSync = fsSync.lstatSync.bind(fsSync);
       vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
         const stat = realLstatSync(...args);
-        if (String(args[0]) !== lockPath) {
+        if (!observesLock(args[0])) {
           return stat;
         }
         return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
