@@ -4,7 +4,7 @@
 
 ### Fixes
 
-- **Relative escape checks:** treat both `/` and `\` `..` segments as escapes, including `../secret` on Windows.
+- **Relative escape checks:** on Windows, treat a `..` segment after either `/` or `\` as an escape. A backslash stays an ordinary filename character on POSIX.
 
 ### Performance
 

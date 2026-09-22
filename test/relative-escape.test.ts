@@ -3,13 +3,16 @@ import { describe, expect, it } from "vitest";
 import { isPathRelativeEscape } from "../src/path.js";
 
 describe("isPathRelativeEscape", () => {
-  it("treats .. segments on either slash as escapes", () => {
+  it("treats dotdot segments after a slash as escapes", () => {
     expect(isPathRelativeEscape("../secret")).toBe(true);
-    expect(isPathRelativeEscape("..\\secret")).toBe(true);
     expect(isPathRelativeEscape("foo/../../x")).toBe(true);
-    expect(isPathRelativeEscape(`..${path.posix.sep}secret`)).toBe(true);
-    expect(isPathRelativeEscape(`..${path.win32.sep}secret`)).toBe(true);
+    expect(isPathRelativeEscape(`..${path.sep}secret`)).toBe(true);
     expect(isPathRelativeEscape("..")).toBe(true);
+  });
+
+  it("treats a backslash dotdot as an escape only on Windows", () => {
+    expect(isPathRelativeEscape("..\\secret")).toBe(process.platform === "win32");
+    expect(isPathRelativeEscape("foo\\..\\secret")).toBe(process.platform === "win32");
   });
 
   it("does not treat a normal relative path as an escape", () => {
@@ -18,9 +21,9 @@ describe("isPathRelativeEscape", () => {
     expect(isPathRelativeEscape(".")).toBe(false);
   });
 
-  it("treats POSIX and Windows absolute paths as escapes", () => {
+  it("treats an absolute path for this platform as an escape", () => {
     expect(isPathRelativeEscape("/secret")).toBe(true);
-    expect(isPathRelativeEscape("C:\\secret")).toBe(true);
-    expect(isPathRelativeEscape("C:/secret")).toBe(true);
+    expect(isPathRelativeEscape("C:\\secret")).toBe(process.platform === "win32");
+    expect(isPathRelativeEscape("C:/secret")).toBe(process.platform === "win32");
   });
 });

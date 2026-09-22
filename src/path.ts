@@ -24,7 +24,12 @@ export {
 const NOT_FOUND_CODES = new Set(["ENOENT", "ENOTDIR"]);
 const SYMLINK_OPEN_CODES = new Set(["ELOOP", "EINVAL", "ENOTSUP"]);
 const POSIX_SEPARATOR_CHAR_CODE = 0x2f;
-const RELATIVE_ESCAPE_SEPARATOR = /[/\\]/;
+
+function relativeEscapeSeparator(): RegExp {
+  // Windows accepts both slash characters. On POSIX a backslash is a
+  // filename character, so `..\name` has to stay inside the root.
+  return process.platform === "win32" ? /[/\\]/ : /\//;
+}
 
 export function normalizeWindowsPathForComparison(input: string): string {
   let normalized = path.win32.normalize(input);
@@ -119,11 +124,10 @@ export function isPathInside(root: string, target: string): boolean {
 }
 
 export function isPathRelativeEscape(relativePath: string): boolean {
-  // Either separator. path.sep only matches the current platform.
-  if (path.posix.isAbsolute(relativePath) || path.win32.isAbsolute(relativePath)) {
+  if (path.isAbsolute(relativePath)) {
     return true;
   }
-  for (const segment of relativePath.split(RELATIVE_ESCAPE_SEPARATOR)) {
+  for (const segment of relativePath.split(relativeEscapeSeparator())) {
     if (segment === "..") {
       return true;
     }
