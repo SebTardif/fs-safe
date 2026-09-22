@@ -92,6 +92,22 @@ function resolveTrashTargetPath(targetPath: string): { path: string; resolved: b
   return { path: resolvedPath, resolved: true };
 }
 
+function resolveTrashEntryParent(lexicalTarget: string, targetPath: string): string {
+  const lexicalParent = path.dirname(lexicalTarget);
+  assertNoTrashPathAlias(lexicalParent, "target path");
+  let realParent: string;
+  try {
+    // The renamed name lives in this parent. rename follows intermediate
+    // symlinks, so a lexical parent inside an allowed root is not enough.
+    realParent = realpathSync.native(lexicalParent);
+  } catch {
+    throw new Error(`Refusing to trash path outside allowed roots: ${targetPath}`);
+  }
+  const resolvedParent = path.resolve(realParent);
+  assertNoTrashPathAlias(resolvedParent, "target path");
+  return resolvedParent;
+}
+
 function assertAllowedTrashTarget(
   targetPath: string,
   allowedRoots: readonly string[],
@@ -102,8 +118,11 @@ function assertAllowedTrashTarget(
   const stat = fs.lstatSync(lexicalTarget);
   const resolvedTarget = resolveTrashTargetPath(targetPath);
   const resolvedTargetPath = resolvedTarget.path;
-  const isAllowed = resolveAllowedTrashRoots(allowedRoots).some(
-    (root) => resolvedTargetPath !== root && isSameOrChildPath(resolvedTargetPath, root),
+  // Admit the directory entry only when its parent really stays inside an
+  // allowed root. Do not admit it because the symlink target is inside.
+  const resolvedParent = resolveTrashEntryParent(lexicalTarget, targetPath);
+  const isAllowed = resolveAllowedTrashRoots(allowedRoots).some((root) =>
+    isSameOrChildPath(resolvedParent, root),
   );
   if (!isAllowed) {
     throw new Error(`Refusing to trash path outside allowed roots: ${targetPath}`);
