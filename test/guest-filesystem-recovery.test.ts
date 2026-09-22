@@ -18,6 +18,29 @@ def _test_rename(source, destination, *args, **kwargs):
 os.rename = _test_rename
 `;
 
+// Mode 0 is not searchable. Widen it only for the open, then restore the
+// previous mode before the guest stats the directory.
+const OPEN_MODE_ZERO_DIRECTORIES = `
+import stat
+_test_original_open = os.open
+def _test_open_mode_zero(path, flags, mode=0o777, *, dir_fd=None):
+    try:
+        return _test_original_open(path, flags, mode, dir_fd=dir_fd)
+    except PermissionError:
+        if dir_fd is None:
+            raise
+        observed = os.lstat(path, dir_fd=dir_fd)
+        if not stat.S_ISDIR(observed.st_mode) or stat.S_ISLNK(observed.st_mode):
+            raise
+        saved = stat.S_IMODE(observed.st_mode)
+        os.chmod(path, 0o755, dir_fd=dir_fd, follow_symlinks=False)
+        try:
+            return _test_original_open(path, flags, mode, dir_fd=dir_fd)
+        finally:
+            os.chmod(path, saved, dir_fd=dir_fd, follow_symlinks=False)
+os.open = _test_open_mode_zero
+`;
+
 describe.skipIf(process.platform === "win32")("guest filesystem cross-device recovery", () => {
   const { tempRoot } = useRealTempDirs();
 
@@ -175,5 +198,55 @@ def _test_after_publication():
     expect(await fs.readFile(path.join(source, "tree", "nested", "file.txt"), "utf8")).toBe("replacement data");
     expect(await fs.readdir(path.join(source, "tree", "nested"))).toEqual(["file.txt"]);
     expect(await fs.readdir(destination)).toEqual(["moved"]);
+  });
+
+  it("preserves mode 0o000 when an EXDEV move copies a directory", async () => {
+    const { source, destination } = await fixture();
+    // Kept empty: mode 0 cannot accept children, but mkdir still records it.
+    const zero = path.join(source, "zero");
+    const parent = path.join(source, "parent");
+    const child = path.join(parent, "child");
+    await fs.mkdir(zero);
+    await fs.chmod(zero, 0o000);
+    await fs.mkdir(parent);
+    await fs.mkdir(child);
+    await fs.chmod(child, 0o000);
+    const zeroCopy = path.join(destination, "zero-copy");
+    const parentCopy = path.join(destination, "parent-copy");
+    const childCopy = path.join(parentCopy, "child");
+    const setup = `${FORCE_EXDEV}\n${OPEN_MODE_ZERO_DIRECTORIES}`;
+    try {
+      const movedZero = runGuest(
+        ["rename", source, "", "zero", destination, "", "zero-copy", "0"],
+        undefined,
+        setup,
+      );
+      expect(movedZero.error).toBeUndefined();
+      expect(movedZero.status, movedZero.stderr.toString()).toBe(0);
+      const zeroStat = await fs.stat(zeroCopy);
+      expect(zeroStat.isDirectory()).toBe(true);
+      expect(zeroStat.mode & 0o777).toBe(0o000);
+      await fs.chmod(zeroCopy, 0o755);
+      expect(await fs.readdir(zeroCopy)).toEqual([]);
+
+      const movedParent = runGuest(
+        ["rename", source, "", "parent", destination, "", "parent-copy", "0"],
+        undefined,
+        setup,
+      );
+      expect(movedParent.error).toBeUndefined();
+      expect(movedParent.status, movedParent.stderr.toString()).toBe(0);
+      expect(await fs.readdir(parentCopy)).toEqual(["child"]);
+      expect((await fs.stat(childCopy)).mode & 0o777).toBe(0o000);
+      await fs.chmod(childCopy, 0o755);
+      expect(await fs.readdir(childCopy)).toEqual([]);
+      await expect(fs.lstat(zero)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.lstat(parent)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      for (const target of [zero, child, zeroCopy, childCopy]) {
+        const present = await fs.stat(target).then(() => true, () => false);
+        if (present) await fs.chmod(target, 0o755);
+      }
+    }
   });
 });
