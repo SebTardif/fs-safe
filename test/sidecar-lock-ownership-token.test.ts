@@ -95,9 +95,18 @@ describe("sidecar lock ownership tokens", () => {
         if (!observesLock(args[0])) {
           return stat;
         }
-        return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
-          ino: typeof stat.ino === "bigint" ? stat.ino + 1n : stat.ino + 1,
+        const drifted = Object.assign(Object.create(Object.getPrototypeOf(stat)), stat);
+        // Windows file indexes can be past Number.MAX_SAFE_INTEGER, so adding 1
+        // does not change the value. Zero is unknown and must not compare equal.
+        Object.defineProperty(drifted, "dev", {
+          value: typeof stat.dev === "bigint" ? 0n : 0,
+          enumerable: true,
         });
+        Object.defineProperty(drifted, "ino", {
+          value: typeof stat.ino === "bigint" ? 0n : 0,
+          enumerable: true,
+        });
+        return drifted;
       });
 
       exitListener = Reflect.get(
