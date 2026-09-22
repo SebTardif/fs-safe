@@ -41,8 +41,15 @@ into this repository unless a repo-specific snapshot is intentionally required.
 - Keep exports, generated declarations, README examples, and docs aligned.
 - Treat exported types, error codes, option defaults, and package subpaths as
   compatibility surfaces.
-- Update `CHANGELOG.md` under `Unreleased` for public, security, compatibility,
-  package, or operational changes.
+- Keep `CHANGELOG.md` focused on users: features, behavior fixes, security
+  hardening, compatibility or migration requirements, and measured performance
+  or package-size improvements. Add pending entries under `Unreleased`.
+- Omit maintenance-only work: internal refactors, deduplication, file/type moves,
+  dependency refreshes, and routine tests or CI changes unless they deliver a
+  specific user-visible outcome.
+- Keep entries concise and group related outcomes. Do not list every PR or add
+  generic cleanup entries that only say behavior is unchanged. Keep implementation
+  and validation details in the PR.
 - Never commit generated `dist/` output.
 - Releases are tag-driven from `main` through
   `.github/workflows/release.yml`; never publish locally or add npm tokens.
