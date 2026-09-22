@@ -252,7 +252,7 @@ pathname is absent; a retry can report `EEXIST`. Before retrying or using the
 pathname, establish that the earlier operation stopped and verify any existing
 directory's security. The library does not attempt pathname-based cleanup.
 
-Use `createIcaclsResetCommand()` when you need a structured command and argv pair. Use `formatIcaclsResetCommand()` when you only need a remediation string for a user-facing message.
+Use `createIcaclsResetCommand()` when you need a structured command and argv pair. Use `formatIcaclsResetCommand()` when you only need a remediation string for a user-facing message. Pasted command text doubles `%` in the path and in a resolved account so cmd.exe does not expand environment variables inside quotes. The unknown-user `%USERNAME%` placeholder stays single so it can still expand. A quote, carriage return, or line feed in that text is rejected. `createIcaclsResetCommand()` argv is not a shell string and stays unescaped; its `display` uses the pasted form.
 
 ## Types
 

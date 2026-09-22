@@ -339,11 +339,34 @@ export function formatWindowsAclSummary(summary: WindowsAclSummary): string {
   return untrusted.length === 0 ? "trusted-only" : untrusted.map((entry) => `${entry.principal}:${entry.rawRights}`).join(", ");
 }
 
+function rejectIcaclsRemediationBreak(value: string): void {
+  if (value.includes("\r") || value.includes("\n") || value.includes('"')) {
+    throw new Error("Windows icacls remediation text contains a quote or newline");
+  }
+}
+
+// cmd.exe expands %VAR% inside quotes. Double literal percents. Callers must
+// not pass the unknown-user %USERNAME% placeholder through this helper.
+function escapeIcaclsRemediationText(value: string): string {
+  rejectIcaclsRemediationBreak(value);
+  return value.replaceAll("%", "%%");
+}
+
 export function formatIcaclsResetCommand(targetPath: string, opts: IcaclsResetCommandOptions): string {
   const command = resolveWindowsSystemCommand("icacls.exe", opts.env);
-  const user = resolveWindowsUserPrincipal(opts.env, opts.userInfo) ?? "%USERNAME%";
+  const resolved = resolveWindowsUserPrincipal(opts.env, opts.userInfo);
   const grant = opts.isDir ? "(OI)(CI)F" : "F";
-  return [command, `"${targetPath}"`, "/inheritance:r", "/grant:r", `"${user}:${grant}"`, "/grant:r", `"*S-1-5-18:${grant}"`].join(" ");
+  const principal = resolved == null ? "%USERNAME%" : escapeIcaclsRemediationText(resolved);
+  rejectIcaclsRemediationBreak(principal);
+  return [
+    escapeIcaclsRemediationText(command),
+    `"${escapeIcaclsRemediationText(targetPath)}"`,
+    "/inheritance:r",
+    "/grant:r",
+    `"${principal}:${grant}"`,
+    "/grant:r",
+    `"*S-1-5-18:${grant}"`,
+  ].join(" ");
 }
 
 export function createIcaclsResetCommand(targetPath: string, opts: IcaclsResetCommandOptions): { command: string; args: string[]; display: string } | null {

@@ -6,6 +6,10 @@
 
 - **Native errors:** reduce temporary allocations when constructing fixed filesystem error messages.
 
+### Fixes
+
+- **Permission remediation:** escape percent signs in Windows `icacls` command text so a pasted path cannot expand environment variables. The unknown-user `%USERNAME%` placeholder is unchanged.
+
 ## 0.18.1 - 2026-09-22
 
 ### Fixes
