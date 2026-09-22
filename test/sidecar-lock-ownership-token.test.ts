@@ -66,7 +66,7 @@ describe("sidecar lock ownership tokens", () => {
     await expect(fsp.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("releases its sidecar from process-exit cleanup when identity drifts", async () => {
+  it("keeps its sidecar on process-exit cleanup when the opened descriptor identity drifts", async () => {
     const base = await tempRoot("fs-safe-sidecar-sync-identity-drift-");
     const targetPath = path.join(base, "state.json");
     const lockPath = `${targetPath}.lock`;
@@ -98,7 +98,7 @@ describe("sidecar lock ownership tokens", () => {
       expect(exitListener).toBeDefined();
       exitListener?.();
 
-      expect(fsSync.existsSync(lockPath)).toBe(false);
+      expect(fsSync.existsSync(lockPath)).toBe(true);
     } finally {
       manager.reset();
     }

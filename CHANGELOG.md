@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixes
+
+- **Lock exit cleanup:** do not delete a lock file when Windows reports an unknown device or inode. Unknown identity fails closed.
+
 ### Performance
 
 - **Native errors:** reduce temporary allocations when constructing fixed filesystem error messages.

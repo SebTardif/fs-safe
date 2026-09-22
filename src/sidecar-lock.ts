@@ -1,6 +1,6 @@
 import fsSync from "node:fs";
 import { FsSafeError } from "./errors.js";
-import { sameFileIdentity } from "./file-identity.js";
+import { sameFileIdentityForCleanup } from "./file-identity.js";
 import {
   removeSidecarLockIfUnchanged,
   sidecarLockSnapshotMatches,
@@ -94,7 +94,9 @@ function snapshotMatchesSync(lockPath: string, observed: SidecarLockSnapshot): b
       (typeof fsSync.constants.O_NONBLOCK === "number" ? fsSync.constants.O_NONBLOCK : 0);
     fd = fsSync.openSync(lockPath, openFlags);
     const openedStat = fsSync.fstatSync(fd);
-    if (!openedStat.isFile()) {
+    // Unknown Windows device or inode values compare equal in sameFileIdentity.
+    // Exit cleanup must fail closed instead of deleting that path.
+    if (!openedStat.isFile() || !sameFileIdentityForCleanup(beforeStat, openedStat)) {
       return false;
     }
     if (observed.raw !== undefined && openedStat.size !== Buffer.byteLength(observed.raw)) {
@@ -102,7 +104,7 @@ function snapshotMatchesSync(lockPath: string, observed: SidecarLockSnapshot): b
     }
     const raw = fsSync.readFileSync(fd, "utf8");
     const afterStat = fsSync.lstatSync(lockPath);
-    if (!afterStat.isFile() || !sameFileIdentity(beforeStat, afterStat)) {
+    if (!afterStat.isFile() || !sameFileIdentityForCleanup(beforeStat, afterStat)) {
       return false;
     }
     return sidecarLockSnapshotMatches({ raw, payload: null, stat: afterStat }, observed);
