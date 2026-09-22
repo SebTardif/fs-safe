@@ -6,6 +6,10 @@
 
 - **Native errors:** reduce temporary allocations when constructing fixed filesystem error messages.
 
+### Fixes
+
+- **Symlink parent checks:** reject a symlink ancestor even when `..` lexically cancels that segment, including `appendRegularFile` with `rejectSymlinkParents`.
+
 ## 0.18.1 - 2026-09-22
 
 ### Fixes
