@@ -4,7 +4,7 @@
 
 ### Fixes
 
-- **Guest directory copy:** preserve mode 0o000 instead of widening it to 0o755 when a directory is copied or moved across devices.
+- **Guest directory copy:** preserve mode 0o000 instead of widening it to 0o755 when a directory is copied or moved across devices. The cross-device temporary directory stays writable until it is published, then receives the source mode.
 
 ### Performance
 
