@@ -18,27 +18,26 @@ def _test_rename(source, destination, *args, **kwargs):
 os.rename = _test_rename
 `;
 
-// Mode 0 is not searchable. Widen it only for the open, then restore the
-// previous mode before the guest stats the directory.
-const OPEN_MODE_ZERO_DIRECTORIES = `
+// Exercise zero-mode branches on unprivileged hosts. This injection is not
+// evidence that the unmodified guest can read an inaccessible source.
+const OPEN_ZERO_MODE_DIRECTORIES = `
 import stat
 _test_original_open = os.open
-def _test_open_mode_zero(path, flags, mode=0o777, *, dir_fd=None):
+def _test_open_zero(path, flags, mode=0o777, *, dir_fd=None):
     try:
         return _test_original_open(path, flags, mode, dir_fd=dir_fd)
     except PermissionError:
         if dir_fd is None:
             raise
         observed = os.lstat(path, dir_fd=dir_fd)
-        if not stat.S_ISDIR(observed.st_mode) or stat.S_ISLNK(observed.st_mode):
+        if not stat.S_ISDIR(observed.st_mode) or stat.S_IMODE(observed.st_mode) != 0:
             raise
-        saved = stat.S_IMODE(observed.st_mode)
-        os.chmod(path, 0o755, dir_fd=dir_fd, follow_symlinks=False)
+        os.chmod(path, 0o700, dir_fd=dir_fd, follow_symlinks=False)
         try:
             return _test_original_open(path, flags, mode, dir_fd=dir_fd)
         finally:
-            os.chmod(path, saved, dir_fd=dir_fd, follow_symlinks=False)
-os.open = _test_open_mode_zero
+            os.chmod(path, 0, dir_fd=dir_fd, follow_symlinks=False)
+os.open = _test_open_zero
 `;
 
 describe.skipIf(process.platform === "win32")("guest filesystem cross-device recovery", () => {
@@ -58,6 +57,170 @@ describe.skipIf(process.platform === "win32")("guest filesystem cross-device rec
       args: ["rename", source, "", "tree", destination, "", "moved", "1"],
     };
   }
+
+  async function zeroModeFixture(nested = false) {
+    const directory = await tempRoot("fs-safe-guest-zero-mode-");
+    const source = path.join(directory, "source");
+    const destination = path.join(directory, "destination");
+    const zero = path.join(source, "tree", ...(nested ? ["child"] : []));
+    await fs.mkdir(zero, { recursive: true });
+    await fs.chmod(zero, 0);
+    await fs.mkdir(destination);
+    return {
+      source, destination, zero,
+      args: ["rename", source, "", "tree", destination, "", "moved", "0"],
+    };
+  }
+
+  async function restoreDirectories(paths: string[]) {
+    for (const target of paths) {
+      await fs.chmod(target, 0o700).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+      });
+    }
+  }
+
+  it.each([false, true])("preserves zero mode with injected directory opens (nested=%s)", async (nested) => {
+    const { source, destination, zero, args } = await zeroModeFixture(nested);
+    const copiedZero = path.join(destination, "moved", ...(nested ? ["child"] : []));
+    try {
+      const result = runGuest(args, undefined, `${FORCE_EXDEV}\n${OPEN_ZERO_MODE_DIRECTORIES}`);
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr.toString()).toBe(0);
+      expect((await fs.stat(copiedZero)).mode & 0o777).toBe(0);
+      expect(await fs.readdir(source)).toEqual([]);
+      expect(await fs.readdir(destination)).toEqual(["moved"]);
+    } finally {
+      await restoreDirectories([zero, copiedZero]);
+    }
+  });
+
+  it.skipIf(process.getuid?.() === 0).each([false, true])("rejects an inaccessible zero-mode source without widening it (nested=%s)", async (nested) => {
+    const { destination, zero, args } = await zeroModeFixture(nested);
+    try {
+      const result = runGuest(args, undefined, FORCE_EXDEV);
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stderr.toString()).toContain("PermissionError");
+      expect((await fs.stat(zero)).mode & 0o777).toBe(0);
+      expect(await fs.readdir(destination)).toEqual([]);
+    } finally {
+      await restoreDirectories([zero]);
+      for (const name of await fs.readdir(destination)) {
+        await restoreDirectories([path.join(destination, name), ...(nested ? [path.join(destination, name, "child")] : [])]);
+      }
+    }
+  });
+
+  it.each([0o022, 0o077])("keeps nonzero directory modes subject to umask %s", async (umask) => {
+    const { source, destination, args } = await fixture();
+    await fs.chmod(path.join(source, "tree"), 0o755);
+    await fs.chmod(path.join(source, "tree", "nested"), 0o755);
+    const result = runGuest(args, undefined, `${FORCE_EXDEV}\nos.umask(${umask})`);
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr.toString()).toBe(0);
+    expect((await fs.stat(path.join(destination, "moved"))).mode & 0o777).toBe(0o755 & ~umask);
+    expect((await fs.stat(path.join(destination, "moved", "nested"))).mode & 0o777).toBe(0o755 & ~umask);
+    expect(await fs.readdir(source)).toEqual([]);
+  });
+
+  it.each([{ before: 0, admitted: 0o755 }, { before: 0o755, admitted: 0 }])(
+    "uses the admitted source mode after $before changes to $admitted before open",
+    async ({ before, admitted }) => {
+      const { source, destination, zero, args } = await zeroModeFixture();
+      await fs.chmod(zero, before);
+      const copied = path.join(destination, "moved");
+      const setup = `${FORCE_EXDEV}\n${OPEN_ZERO_MODE_DIRECTORIES}
+os.umask(0o022)
+_test_open_before_change = os.open
+_test_mode_changed = False
+def _test_change_source_mode(path, flags, mode=0o777, *, dir_fd=None):
+    global _test_mode_changed
+    if not _test_mode_changed and path == sys.argv[4] and dir_fd is not None:
+        _test_mode_changed = True
+        os.chmod(path, ${admitted}, dir_fd=dir_fd, follow_symlinks=False)
+    return _test_open_before_change(path, flags, mode, dir_fd=dir_fd)
+os.open = _test_change_source_mode
+`;
+      try {
+        const result = runGuest(args, undefined, setup);
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stderr.toString()).toBe(0);
+        expect((await fs.stat(copied)).mode & 0o777).toBe(admitted);
+        expect(await fs.readdir(source)).toEqual([]);
+        expect(await fs.readdir(destination)).toEqual(["moved"]);
+      } finally {
+        await restoreDirectories([zero, copied]);
+      }
+    },
+  );
+
+  it.each([false, true])("leaves replacement entries untouched when zero-mode fchmod fails=%s", async (fail) => {
+    const { source, destination, zero, args } = await zeroModeFixture();
+    const retained = path.join(destination, "retained-published");
+    const moved = path.join(destination, "moved");
+    const setup = `${FORCE_EXDEV}\n${OPEN_ZERO_MODE_DIRECTORIES}
+import atexit
+_test_staging_name = None
+_test_staging_fd = None
+_test_original_fchmod = os.fchmod
+def _test_after_publication():
+    global _test_staging_name
+    _test_original_rename(os.path.join(sys.argv[5], sys.argv[7]), os.path.join(sys.argv[5], 'retained-published'))
+    for name in (sys.argv[7], _test_staging_name):
+        replacement = os.path.join(sys.argv[5], name)
+        os.mkdir(replacement, 0o700)
+        with open(os.path.join(replacement, 'competitor.txt'), 'w') as output:
+            output.write('unrelated competitor')
+_test_forced_rename = os.rename
+def _test_remember_staging(source, destination, *args, **kwargs):
+    global _test_staging_name
+    if destination == sys.argv[7] and source != sys.argv[4]:
+        _test_staging_name = source
+    return _test_forced_rename(source, destination, *args, **kwargs)
+os.rename = _test_remember_staging
+def _test_fchmod(fd, mode):
+    global _test_staging_fd
+    _test_staging_fd = fd
+    observed = os.fstat(fd)
+    retained = os.stat(os.path.join(sys.argv[5], 'retained-published'))
+    assert (observed.st_dev, observed.st_ino) == (retained.st_dev, retained.st_ino)
+    sys.stderr.write('retained descriptor selected\\n')
+    ${fail ? "raise OSError(errno.EPERM, 'injected fchmod failure')" : "return _test_original_fchmod(fd, mode)"}
+os.fchmod = _test_fchmod
+def _test_verify_closed():
+    if _test_staging_fd is None:
+        return
+    try:
+        os.fstat(_test_staging_fd)
+    except OSError as error:
+        if error.errno == errno.EBADF:
+            sys.stderr.write('retained descriptor closed\\n')
+atexit.register(_test_verify_closed)
+`;
+    try {
+      const result = runGuest(args, undefined, setup);
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr.toString()).toBe(fail ? 1 : 0);
+      expect(result.stderr.toString()).toContain("retained descriptor selected");
+      expect(result.stderr.toString()).toContain("retained descriptor closed");
+      if (fail) expect(result.stderr.toString()).toContain("injected fchmod failure");
+      expect((await fs.stat(retained)).mode & 0o777).toBe(fail ? 0o700 : 0);
+      expect(await fs.readdir(source)).toEqual(fail ? ["tree"] : []);
+      const entries = (await fs.readdir(destination)).sort();
+      expect(entries).toHaveLength(3);
+      expect(entries[0]).toMatch(/^\.openclaw-move-/);
+      expect(entries.slice(1)).toEqual(["moved", "retained-published"]);
+      for (const entry of [entries[0]!, "moved"]) {
+        const replacement = path.join(destination, entry);
+        expect((await fs.stat(replacement)).mode & 0o777).toBe(0o700);
+        expect(await fs.readdir(replacement)).toEqual(["competitor.txt"]);
+        expect(await fs.readFile(path.join(replacement, "competitor.txt"), "utf8")).toBe("unrelated competitor");
+      }
+    } finally {
+      await restoreDirectories([zero, moved, retained]);
+    }
+  });
 
   it("publishes a directory with a long destination basename before removing its source after EXDEV", async () => {
     const payload = Buffer.alloc(65_573, 0x6b);
@@ -198,55 +361,5 @@ def _test_after_publication():
     expect(await fs.readFile(path.join(source, "tree", "nested", "file.txt"), "utf8")).toBe("replacement data");
     expect(await fs.readdir(path.join(source, "tree", "nested"))).toEqual(["file.txt"]);
     expect(await fs.readdir(destination)).toEqual(["moved"]);
-  });
-
-  it("preserves mode 0o000 when an EXDEV move copies a directory", async () => {
-    const { source, destination } = await fixture();
-    // Kept empty: mode 0 cannot accept children, but mkdir still records it.
-    const zero = path.join(source, "zero");
-    const parent = path.join(source, "parent");
-    const child = path.join(parent, "child");
-    await fs.mkdir(zero);
-    await fs.chmod(zero, 0o000);
-    await fs.mkdir(parent);
-    await fs.mkdir(child);
-    await fs.chmod(child, 0o000);
-    const zeroCopy = path.join(destination, "zero-copy");
-    const parentCopy = path.join(destination, "parent-copy");
-    const childCopy = path.join(parentCopy, "child");
-    const setup = `${FORCE_EXDEV}\n${OPEN_MODE_ZERO_DIRECTORIES}`;
-    try {
-      const movedZero = runGuest(
-        ["rename", source, "", "zero", destination, "", "zero-copy", "0"],
-        undefined,
-        setup,
-      );
-      expect(movedZero.error).toBeUndefined();
-      expect(movedZero.status, movedZero.stderr.toString()).toBe(0);
-      const zeroStat = await fs.stat(zeroCopy);
-      expect(zeroStat.isDirectory()).toBe(true);
-      expect(zeroStat.mode & 0o777).toBe(0o000);
-      await fs.chmod(zeroCopy, 0o755);
-      expect(await fs.readdir(zeroCopy)).toEqual([]);
-
-      const movedParent = runGuest(
-        ["rename", source, "", "parent", destination, "", "parent-copy", "0"],
-        undefined,
-        setup,
-      );
-      expect(movedParent.error).toBeUndefined();
-      expect(movedParent.status, movedParent.stderr.toString()).toBe(0);
-      expect(await fs.readdir(parentCopy)).toEqual(["child"]);
-      expect((await fs.stat(childCopy)).mode & 0o777).toBe(0o000);
-      await fs.chmod(childCopy, 0o755);
-      expect(await fs.readdir(childCopy)).toEqual([]);
-      await expect(fs.lstat(zero)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.lstat(parent)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      for (const target of [zero, child, zeroCopy, childCopy]) {
-        const present = await fs.stat(target).then(() => true, () => false);
-        if (present) await fs.chmod(target, 0o755);
-      }
-    }
   });
 });

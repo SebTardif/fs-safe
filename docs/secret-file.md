@@ -113,6 +113,10 @@ If an already validated descriptor fails while reading, both readers throw an
 operational `FsSafeError` with `code: "read-failed"`; inspect `cause` for the
 underlying Node filesystem code such as `EIO`.
 
+Caught `null` or `undefined` inspection and read failures are reported as
+structured errors with an `Error` cause carrying `"null"` or `"undefined"`,
+instead of an internal `TypeError` while inspecting the thrown value.
+
 A synchronous reader closes its descriptor once. A close failure preserves an
 earlier read or identity-validation error; after a successful read, the close
 failure is reported before trimming or rejecting empty content.
@@ -136,6 +140,11 @@ startWebhookVerifier(signingKey);
 ### `writeSecretFileAtomic(params)`
 
 Async. Creates the parent directory at `dirMode` (default `0o700`) if missing, writes content to a sibling temp file, finalizes `mode` (default `0o600`) through an owned descriptor after content writes, and atomically renames over the destination. Publication verification checks the final file identity and mode.
+
+Both secret writers capture top-level parameter values when called, before
+asynchronous filesystem preparation; a supplied byte buffer is captured by
+reference. A parameter getter throwing `null` or `undefined` rejects with that
+same value before filesystem inspection.
 
 On POSIX, both native and JavaScript writers verify actual `0o600` permission
 bits through the retained descriptor before writing content. A filesystem that

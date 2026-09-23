@@ -1,37 +1,26 @@
 import type { BigIntStats, Stats } from "node:fs";
 
-import { FsSafeError } from "./errors.js";
-import { recordFileObservationFailure } from "./file-observation.js";
+import { fileIdentityMismatchError } from "./strict-file-identity.js";
 import { getNativeBinding } from "./native.js";
 import { getFsSafeNativeConfig } from "./native-config.js";
 import { warnNativeFallback } from "./native-fallback-warning.js";
 import type { PermissionCheck } from "./permissions.js";
 import { inspectWindowsDescriptorCommand } from "./windows-security-command.js";
-import { validateSecureWindowsSecurityFacts } from "./windows-security-facts.js";
+import { unverified as permissionUnverified, validateSecureWindowsSecurityFacts } from "./windows-security-facts.js";
 
 const IDENTITY_RE = /^([0-9a-f]{8}):([0-9a-f]{16})$/;
 const TRUSTED_OWNER_CLASSES = new Set(["current-user", "system", "administrators"]);
 
 type ExactIdentity = Pick<BigIntStats, "dev" | "ino">;
 
-function permissionUnverified(message: string, cause?: unknown): never {
-  throw new FsSafeError("permission-unverified", message, cause === undefined ? {} : { cause });
-}
-
-function identityMismatch(): never {
-  const error = new FsSafeError("path-mismatch", "file identity changed or could not be verified");
-  recordFileObservationFailure(error, "identity");
-  throw error;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
 function parseIdentity(value: unknown): ExactIdentity {
-  if (typeof value !== "string") identityMismatch();
+  if (typeof value !== "string") throw fileIdentityMismatchError();
   const match = IDENTITY_RE.exec(value);
-  if (!match) identityMismatch();
+  if (!match) throw fileIdentityMismatchError();
   return {
     dev: BigInt(`0x${match[1]}`),
     ino: BigInt(`0x${match[2]}`),
@@ -45,7 +34,7 @@ function inspectDescriptorResult(params: {
   if (!isRecord(result)) permissionUnverified("Windows descriptor ACL facts were malformed");
   const observed = parseIdentity(result.identity);
   if (observed.dev !== params.identity.dev || observed.ino !== params.identity.ino) {
-    identityMismatch();
+    throw fileIdentityMismatchError();
   }
   const facts = validateSecureWindowsSecurityFacts(result.security);
   return {

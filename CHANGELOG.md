@@ -4,11 +4,23 @@
 
 ### Fixes
 
-- **Guest directory copy:** preserve mode 0o000 instead of widening it to 0o755 when a directory is copied or moved across devices. The cross-device temporary directory stays writable until it is published, then receives the source mode.
+- **Guest directory moves:** preserve mode `000` across devices without changing other directory modes or their umask behavior; restore permissions through the retained directory descriptor and preserve published entries on failure. Thanks @SebTardif. ([#616](https://github.com/openclaw/fs-safe/pull/616))
+- **Literal entry names:** preserve `~` files and directories during Root walks and ZIP/TAR extraction, including followed in-root symlinks and durable publication.
+- **Home-directory walks:** expand caller `~` and `~/dir` paths when iteration starts, without requiring a literal `~` directory; report the admitted canonical path relative to the Root while keeping `./~` literal.
+- **FileStore keys:** keep `~` and `~/name` literal across reads, writes, removal, and pruning, preventing operations from selecting a different in-root home path.
+- **Absolute reads:** keep literal `~` path components in `Root.readAbsolute()` and `reader()` while preserving home expansion for relative `~/name` inputs.
 
-### Performance
+### Documentation
 
-- **Native errors:** reduce temporary allocations when constructing fixed filesystem error messages.
+- **Creation permissions:** clarify that `Root.append()` and `openWritable()` creation modes remain subject to the process umask and do not chmod existing files.
+
+## 0.18.2 - 2026-09-22
+
+### Fixes
+
+- **Lock errors:** preserve Root stale-removal rejections and `null` or `undefined` retry failures instead of masking them with timeouts or `TypeError`s. ([#624](https://github.com/openclaw/fs-safe/pull/624))
+- **Secret-file reads:** report caught `null` or `undefined` inspection and read failures as structured errors instead of internal `TypeError`s. ([#623](https://github.com/openclaw/fs-safe/pull/623))
+- **Secret-file creation:** preserve `null` or `undefined` thrown by parameter getters instead of masking them with an internal `TypeError`. ([#625](https://github.com/openclaw/fs-safe/pull/625))
 
 ## 0.18.1 - 2026-09-22
 
