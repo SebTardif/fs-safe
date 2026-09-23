@@ -4,6 +4,7 @@
 
 ### Fixes
 
+- **Guest directory moves:** preserve mode `000` across devices without changing other directory modes or their umask behavior; restore permissions through the retained directory descriptor and preserve published entries on failure. Thanks @SebTardif. ([#616](https://github.com/openclaw/fs-safe/pull/616))
 - **Literal entry names:** preserve `~` files and directories during Root walks and ZIP/TAR extraction, including followed in-root symlinks and durable publication.
 - **Home-directory walks:** expand caller `~` and `~/dir` paths when iteration starts, without requiring a literal `~` directory; report the admitted canonical path relative to the Root while keeping `./~` literal.
 - **FileStore keys:** keep `~` and `~/name` literal across reads, writes, removal, and pruning, preventing operations from selecting a different in-root home path.
