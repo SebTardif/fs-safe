@@ -32,12 +32,9 @@ export type AsyncWalkDirectoryOptions = Omit<WalkDirectoryOptions, "include" | "
   descend?: (entry: WalkDirectoryEntry) => boolean | Promise<boolean>;
 };
 
-export type WalkDirectoryFailure = {
-  path: string;
-  relativePath: string;
-  depth: number;
-  error: unknown;
-};
+export type WalkDirectoryFailure = Pick<
+  WalkDirectoryEntry & { error: unknown }, "path" | "relativePath" | "depth" | "error"
+>;
 
 export type WalkDirectoryResult = {
   entries: WalkDirectoryEntry[];
@@ -85,11 +82,8 @@ function shouldStop(result: WalkDirectoryResult, options: Pick<WalkDirectoryOpti
   return options.maxEntries !== undefined && result.scannedEntryCount >= Math.max(0, options.maxEntries);
 }
 
-function buildEntry(params: {
-  relativePath: string;
+function buildEntry(params: Pick<WalkDirectoryEntry, "relativePath" | "dirent" | "depth"> & {
   fullPath: string;
-  dirent: fsSync.Dirent;
-  depth: number;
   kind?: WalkEntryKind;
 }): WalkDirectoryEntry {
   const fullPath = params.fullPath;

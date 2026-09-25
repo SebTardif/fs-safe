@@ -11,6 +11,7 @@ import {
   trimHyphenEdges,
 } from "./safe-path-segment.js";
 import { resolveSecureTempRoot } from "./secure-temp-dir.js";
+import { hasNodeErrorCode } from "./path.js";
 import { registerTempPathForExit } from "./temp-cleanup.js";
 import {
   assertNoWindowsPathAlias,
@@ -129,15 +130,6 @@ export function buildRandomTempFilePath(params: {
   return filePath;
 }
 
-function isNodeErrorWithCode(err: unknown, code: string): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "code" in err &&
-    (err as { code?: string }).code === code
-  );
-}
-
 async function cleanupTempDir(
   dir: string,
   identity: FileIdentityStat,
@@ -150,7 +142,7 @@ async function cleanupTempDir(
     }
     await fs.rm(dir, { recursive: true, force: true });
   } catch (err) {
-    if (!isNodeErrorWithCode(err, "ENOENT")) {
+    if (!hasNodeErrorCode(err, "ENOENT")) {
       onCleanupError?.(err);
     }
   }
@@ -247,7 +239,7 @@ export async function createOwnedTempFile(params: TempFileOptions): Promise<{
         try {
           await owner.cleanup();
         } catch (err) {
-          if (!isNodeErrorWithCode(err, "ENOENT")) {
+          if (!hasNodeErrorCode(err, "ENOENT")) {
             params.onCleanupError?.(err);
           }
         }

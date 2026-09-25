@@ -30,6 +30,7 @@ import { realpathSync } from "./realpath.js";
 import { getFsSafeTestHooks } from "./test-hooks.js";
 import {
   assertPreparedRootWriteParentCurrent,
+  writeSelectionChanged,
   type PreparedRootWriteParent,
 } from "./root-write-complete-parent.js";
 
@@ -76,10 +77,6 @@ export function createRootWriteSelectionForFd(
     ...selection,
     identity: Object.freeze({ dev: stat.dev, ino: stat.ino }),
   });
-}
-
-function writeSelectionChanged(cause?: unknown): FsSafeError {
-  return new FsSafeError("path-mismatch", "write target changed during operation", errorCauseOptions(cause));
 }
 
 function inspectRegularSelectionPath(
@@ -334,7 +331,6 @@ export async function resolveGuardedWriteTargetInRoot(
   const relativeParent = path.relative(resolvedPath.rootReal, path.dirname(resolvedPath.resolved));
   const prepared = await preparePinnedWriteMutationAdmission({
     rootReal: resolvedPath.rootReal,
-    rootWithSep: resolvedPath.rootWithSep,
     rootIdentity: root.rootIdentity,
     resolvedTargetPath: resolvedPath.resolved,
     originalPath: params.relativePath,
@@ -430,7 +426,6 @@ export async function resolvePinnedWriteTargetInRoot(
   if (policy) {
     ({ relativeParentPath, mutationAdmission } = await preparePinnedWriteMutationAdmission({
       rootReal,
-      rootWithSep,
       rootIdentity: root.rootIdentity,
       resolvedTargetPath: resolved,
       originalPath: relativePath,

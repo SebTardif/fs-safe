@@ -49,7 +49,7 @@ export function isSafePathSegment(
     !segment.includes("/") &&
     !segment.includes("\\") &&
     !segment.includes("\0") &&
-    // CON.json and CON.<pid>.tmp open the CON device on Windows.
+    // Segments are portable identifiers: CON.json and CON.<pid>.tmp name devices on Windows.
     !isWindowsReservedDeviceName(segment) &&
     (options.allowDotPrefix === true || !segment.startsWith(".")) &&
     (options.allowDotPrefix === true

@@ -9,6 +9,14 @@ use rustix::path::Arg;
 
 use crate::{ExactFileIdentity, FileIdentity, NativeResult, native_error};
 
+pub(crate) fn nonnegative_fd(fd: i32, operation: &str) -> NativeResult<i32> {
+    // Reject sentinels; the caller still owns and retains each live descriptor.
+    if fd < 0 {
+        return Err(os_error(rustix::io::Errno::BADF, operation));
+    }
+    Ok(fd)
+}
+
 pub(crate) fn borrowed(fd: i32) -> BorrowedFd<'static> {
     // SAFETY: Every public operation borrows the descriptor only for the
     // duration of the call. Ownership stays with Node.js.
@@ -88,6 +96,11 @@ pub(crate) fn open_owned_beneath(root_fd: i32, rel_path: &str, flags: i32) -> Na
     if rel_path.is_empty() || rel_path == "." {
         return duplicate_cloexec(root_fd);
     }
+    // Negative sentinels are not retained capabilities: -1 cannot be borrowed,
+    // and AT_FDCWD would substitute the process's working directory.
+    if root_fd < 0 {
+        return Err(os_error(rustix::io::Errno::BADF, "openat2 beneath root"));
+    }
     let oflags = OFlags::from_bits_retain(flags as u32) | OFlags::CLOEXEC;
     // O_TMPFILE contains O_DIRECTORY; a directory-only open still requires mode 0.
     let mode = if oflags.contains(OFlags::CREATE) || oflags.contains(OFlags::TMPFILE) {
@@ -135,6 +148,7 @@ fn open_parent(root_fd: i32, path: &str) -> NativeResult<(OwnedFd, &str)> {
 
 pub fn mkdir_child_beneath(parent_fd: i32, basename: &str, mode: u32) -> NativeResult<bool> {
     crate::validate_child_basename(basename)?;
+    let parent_fd = nonnegative_fd(parent_fd, "mkdirat direct child")?;
     match rustix::fs::mkdirat(
         borrowed(parent_fd),
         basename,
@@ -318,6 +332,7 @@ pub fn rename_replace(
 }
 
 pub fn fstat_identity(fd: i32) -> NativeResult<FileIdentity> {
+    let fd = nonnegative_fd(fd, "fstat")?;
     let stat = rustix::fs::fstat(borrowed(fd)).map_err(|error| os_error(error, "fstat"))?;
     let file_type = FileType::from_raw_mode(stat.st_mode);
     Ok(FileIdentity {
@@ -372,7 +387,8 @@ pub fn open_independent_reader(fd: i32) -> NativeResult<IndependentReader> {
 }
 
 pub fn read_at(reader: &IndependentReader, buffer: &mut [u8], offset: u64) -> NativeResult<usize> {
-    rustix::io::pread(borrowed(*reader), buffer, offset)
+    let fd = nonnegative_fd(*reader, "read file at offset")?;
+    rustix::io::pread(borrowed(fd), buffer, offset)
         .map_err(|error| os_error(error, "read file at offset"))
 }
 
@@ -394,8 +410,10 @@ pub(crate) fn validate_child_basename(name: &str) -> NativeResult<()> {
 
 pub(crate) fn file_matches_child(parent_fd: i32, name: &str, file_fd: i32) -> NativeResult<bool> {
     validate_child_basename(name)?;
+    let file_fd = nonnegative_fd(file_fd, "inspect staged descriptor")?;
     let created = rustix::fs::fstat(borrowed(file_fd))
         .map_err(|error| os_error(error, "inspect staged descriptor"))?;
+    let parent_fd = nonnegative_fd(parent_fd, "inspect staged child")?;
     let current = rustix::fs::statat(borrowed(parent_fd), name, AtFlags::SYMLINK_NOFOLLOW)
         .map_err(|error| os_error(error, "inspect staged child"))?;
     Ok(FileType::from_raw_mode(created.st_mode).is_file()
@@ -441,8 +459,10 @@ fn inspect_child(
 }
 
 fn directory_name_matches_fd(parent_fd: i32, name: &str, directory_fd: i32) -> NativeResult<bool> {
+    let directory_fd = nonnegative_fd(directory_fd, "inspect owned directory descriptor")?;
     let opened = rustix::fs::fstat(borrowed(directory_fd))
         .map_err(|error| os_error(error, "inspect owned directory descriptor"))?;
+    let parent_fd = nonnegative_fd(parent_fd, "inspect owned directory name")?;
     let Some(current) = inspect_child(parent_fd, name, "inspect owned directory name")? else {
         return Ok(false);
     };
@@ -793,7 +813,12 @@ pub(crate) fn clone_file_exclusive_with_sync(
     sync: bool,
 ) -> NativeResult<i32> {
     let target = create_exclusive_target(target_root_fd, target_rel_path)?;
-    if let Err(error) = rustix::fs::ioctl_ficlone(target.as_fd(), borrowed(source_fd)) {
+    let cloned = if source_fd < 0 {
+        Err(rustix::io::Errno::BADF)
+    } else {
+        rustix::fs::ioctl_ficlone(target.as_fd(), borrowed(source_fd))
+    };
+    if let Err(error) = cloned {
         let error = if matches!(
             error,
             rustix::io::Errno::NOTTY
@@ -921,7 +946,9 @@ pub(crate) fn clone_file_exclusive_with_sync(
     const CLONE_NOOWNERCOPY: u32 = 0x0002;
     static CLONE_COUNTER: AtomicU64 = AtomicU64::new(0);
     // Reject parent ACLs before creating any stage or materializing clone bytes.
+    let target_root_fd = nonnegative_fd(target_root_fd, "inspect descriptor security facts")?;
     inspect_clone_directory(borrowed(target_root_fd), false)?;
+    let source_fd = nonnegative_fd(source_fd, "inspect clone source")?;
     let source_stat = rustix::fs::fstat(borrowed(source_fd))
         .map_err(|error| os_error(error, "inspect clone source"))?;
     if source_stat.st_flags != 0 {
@@ -1223,6 +1250,7 @@ pub fn copy_file_range_exclusive(
     target_root_fd: i32,
     target_rel_path: &str,
 ) -> NativeResult<(i32, u64)> {
+    let source_fd = nonnegative_fd(source_fd, "inspect copy source")?;
     let source_stat = rustix::fs::fstat(borrowed(source_fd))
         .map_err(|error| os_error(error, "inspect copy source"))?;
     let expected = u64::try_from(source_stat.st_size)
@@ -1344,6 +1372,7 @@ mod macos {
     fn open_with_resolve_beneath(root_fd: RawFd, rel_path: &str, flags: i32) -> NativeResult<OwnedFd> {
         let path = CString::new(rel_path.as_bytes())
             .map_err(|_| native_error("EINVAL", "path contains a NUL byte"))?;
+        let root_fd = super::nonnegative_fd(root_fd, "open path with O_RESOLVE_BENEATH")?;
         // SAFETY: root_fd is borrowed for this call and path is NUL-terminated.
         let opened = unsafe {
             libc::openat(
@@ -2249,7 +2278,7 @@ mod tests {
         let root = temp_root("copy-invalid-source");
         let parent = std::fs::File::open(&root).unwrap();
         assert_eq!(
-            copy_file_range_exclusive(i32::MAX, parent.as_raw_fd(), "target")
+            copy_file_range_exclusive(-1, parent.as_raw_fd(), "target")
                 .err()
                 .unwrap()
                 .status,
@@ -2299,6 +2328,44 @@ mod tests {
         assert_eq!(error.status, "EEXIST");
         assert_eq!(fs::read(root.join("target")).unwrap(), b"target");
         assert!(root_handle.metadata().unwrap().is_dir());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn negative_roots_are_rejected_before_path_lookup() {
+        for fd in [libc::AT_FDCWD, i32::MIN, -1] {
+            for relative in ["", ".", "missing", "missing/child"] {
+                let error = open_owned_beneath(fd, relative, directory_open_flags()).unwrap_err();
+                assert_eq!(error.status, "EBADF", "fd {fd}, path {relative:?}");
+            }
+        }
+        let error = open_owned_beneath(libc::AT_FDCWD, "../outside", directory_open_flags())
+            .unwrap_err();
+        assert_eq!(error.status, "EINVAL");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn nested_rename_keeps_parent_admission_order_with_negative_roots() {
+        let root = temp_root("rename-negative-nested");
+        fs::create_dir(root.join("parent")).unwrap();
+        fs::write(root.join("parent/source"), b"source").unwrap();
+        let source_parent = OpenOptions::new().read(true).open(&root).unwrap();
+        for fd in [libc::AT_FDCWD, i32::MIN, -1] {
+            let source = rename_no_replace(fd, "parent/source", fd, "parent/target")
+                .unwrap_err();
+            assert_eq!(source.status, "EBADF");
+            let missing = rename_no_replace(source_parent.as_raw_fd(), "missing/source", fd, "parent/target")
+                .unwrap_err();
+            assert_eq!(missing.status, "ENOENT");
+            let target = rename_no_replace(source_parent.as_raw_fd(), "parent/source", fd, "parent/target")
+                .unwrap_err();
+            assert_eq!(target.status, "EBADF");
+            assert!(source_parent.metadata().unwrap().is_dir());
+            assert_eq!(fs::read(root.join("parent/source")).unwrap(), b"source");
+            assert!(!root.join("parent/target").exists());
+        }
         fs::remove_dir_all(root).unwrap();
     }
 
