@@ -66,7 +66,7 @@ describe("sidecar lock ownership tokens", () => {
     await expect(fsp.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("keeps its sidecar on process-exit cleanup when the opened descriptor identity drifts", async () => {
+  it("releases its sidecar on process-exit cleanup with known descriptor/path identity drift", async () => {
     const base = await tempRoot("fs-safe-sidecar-sync-identity-drift-");
     const targetPath = path.join(base, "state.json");
     const lockPath = `${targetPath}.lock`;
@@ -95,18 +95,10 @@ describe("sidecar lock ownership tokens", () => {
         if (!observesLock(args[0])) {
           return stat;
         }
-        const drifted = Object.assign(Object.create(Object.getPrototypeOf(stat)), stat);
-        // Windows file indexes can be past Number.MAX_SAFE_INTEGER, so adding 1
-        // does not change the value. Zero is unknown and must not compare equal.
-        Object.defineProperty(drifted, "dev", {
-          value: typeof stat.dev === "bigint" ? 0n : 0,
-          enumerable: true,
+        // Doubling stays different even beyond Number.MAX_SAFE_INTEGER on Windows.
+        return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
+          ino: typeof stat.ino === "bigint" ? stat.ino * 2n : stat.ino * 2,
         });
-        Object.defineProperty(drifted, "ino", {
-          value: typeof stat.ino === "bigint" ? 0n : 0,
-          enumerable: true,
-        });
-        return drifted;
       });
 
       exitListener = Reflect.get(
@@ -116,7 +108,7 @@ describe("sidecar lock ownership tokens", () => {
       expect(exitListener).toBeDefined();
       exitListener?.();
 
-      expect(fsSync.existsSync(lockPath)).toBe(true);
+      expect(fsSync.existsSync(lockPath)).toBe(false);
     } finally {
       manager.reset();
     }

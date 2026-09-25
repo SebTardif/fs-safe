@@ -119,7 +119,13 @@ publication failure preserves the existing destination and source link; ordinary
 failure cleanup removes the staging directory.
 
 Cross-device directory moves build a copy manifest and check it during source
-cleanup. Source changes can leave the published destination and some or all
+cleanup. Directory creation keeps the source mode subject to the guest's umask;
+mode `000` is not replaced with a default. A top-level mode-000 directory uses
+owner-only staging until publication, then restores zero through its retained
+descriptor. Reading a mode-000 source still requires sufficient OS privileges;
+the guest does not change source permissions to gain access. A permission error
+after publication preserves the source and published copy for reconciliation.
+Source changes can leave the published destination and some or all
 of the source. Regular-file and symlink move fallbacks unlink the source
 pathname after publication; they do not perform the directory manifest's
 identity checks. Directory cleanup also has check-to-unlink race windows.

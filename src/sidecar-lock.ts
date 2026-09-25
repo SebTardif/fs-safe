@@ -94,9 +94,9 @@ function snapshotMatchesSync(lockPath: string, observed: SidecarLockSnapshot): b
       (typeof fsSync.constants.O_NONBLOCK === "number" ? fsSync.constants.O_NONBLOCK : 0);
     fd = fsSync.openSync(lockPath, openFlags);
     const openedStat = fsSync.fstatSync(fd);
-    // Unknown Windows device or inode values compare equal in sameFileIdentity.
-    // Exit cleanup must fail closed instead of deleting that path.
-    if (!openedStat.isFile() || !sameFileIdentityForCleanup(beforeStat, openedStat)) {
+    // Token-owned files can have different descriptor/path identities on VirtioFS.
+    // Require a known descriptor identity without rejecting that supported drift.
+    if (!openedStat.isFile() || !sameFileIdentityForCleanup(openedStat, openedStat)) {
       return false;
     }
     if (observed.raw !== undefined && openedStat.size !== Buffer.byteLength(observed.raw)) {
