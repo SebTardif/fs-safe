@@ -4,22 +4,35 @@
 
 ### Features
 
-- **Secret-file creation:** add `durable: "file"` to require successful file synchronization, including on `EPERM`, while preserving best-effort directory synchronization and existing boolean durability behavior.
+- **Retained symlink publication:** `retainSymlinkInDirectory()` on the advanced surface holds an explicitly identified POSIX symlink through exact-slot no-replace publication and explicit recovery, preserving observed foreign replacements and uncertain outcomes.
+
+- **Batched Windows ACL facts:** add `readOwnerAndDaclBatch()` to inspect ordered paths in one isolated native worker or one PowerShell process, with a configurable whole-batch timeout and bounded output. Existing synchronous inspection remains unchanged.
 
 ### Fixes
 
-- **Trash containment:** move only a directory entry whose parent really stays inside an allowed root, including when an intermediate symlink or an outside symlink points at an inside file.
-- **Native Unix file-copy admission:** reject negative source and parent descriptors without panicking in invalid low-level addon calls.
-- **Native Linux root admission:** reject negative root descriptors before guarded traversal, avoiding Rust panics and working-directory resolution in invalid low-level addon calls.
-- **Guest directory moves:** preserve mode `000` across devices without changing other directory modes or their umask behavior; restore permissions through the retained directory descriptor and preserve published entries on failure. Thanks @SebTardif. ([#616](https://github.com/openclaw/fs-safe/pull/616))
-- **Literal entry names:** preserve `~` files and directories during Root walks and ZIP/TAR extraction, including followed in-root symlinks and durable publication.
-- **Home-directory walks:** expand caller `~` and `~/dir` paths when iteration starts, without requiring a literal `~` directory; report the admitted canonical path relative to the Root while keeping `./~` literal.
-- **FileStore keys:** keep `~` and `~/name` literal across reads, writes, removal, and pruning, preventing operations from selecting a different in-root home path.
-- **Absolute reads:** keep literal `~` path components in `Root.readAbsolute()` and `reader()` while preserving home expansion for relative `~/name` inputs.
+- **Trash containment:** admit the moved entry by its real parent and retain the parent guard through mutation, including dangling and outward-pointing symlinks. Thanks @SebTardif. ([#611](https://github.com/openclaw/fs-safe/pull/611))
+- **Retained symlink errors:** preserve uncertain publication outcomes and cached cleanup/recovery failures when inspecting thrown error metadata fails, retaining the original cause without retrying mutations, callbacks, or descriptor closes.
+- **Create collision cleanup:** atomic and streamed creates remove their private stage when the JavaScript fallback observes a competing destination before publication; failures after a link attempt retain their existing recovery evidence.
 
-### Documentation
+## 0.19.0 - 2026-09-24
 
-- **Creation permissions:** clarify that `Root.append()` and `openWritable()` creation modes remain subject to the process umask and do not chmod existing files.
+### Highlights
+
+- **Strict secret-file durability:** `createSecretFileAtomic()` accepts `durable: "file"` to require every file flush to succeed, including on `EPERM`; parent-directory synchronization remains best effort. ([#644](https://github.com/openclaw/fs-safe/pull/644))
+- **Literal `~` names:** keep FileStore keys, absolute Root reads, discovered walk entries, and ZIP/TAR entries literal instead of treating them as home-directory shorthand. Reads, writes, removal, pruning, extraction, and durable publication select the intended entry. ([#633](https://github.com/openclaw/fs-safe/pull/633))
+- **Native Unix descriptor safety:** reject negative descriptors in low-level root, query, hash, copy, clone, staging, and cleanup calls without Rust panics or working-directory operations. Modern macOS beneath opens report `EBADF` for negative roots instead of `EIO`. ([#640](https://github.com/openclaw/fs-safe/pull/640), [#643](https://github.com/openclaw/fs-safe/pull/643), [#646](https://github.com/openclaw/fs-safe/pull/646))
+
+### Fixes
+
+- **Guest directory permissions:** cross-device moves preserve mode `000`, including nested directories, without changing other modes' umask behavior. Restore top-level permissions through the retained directory descriptor and preserve published entries on failure. Thanks @SebTardif. ([#616](https://github.com/openclaw/fs-safe/pull/616))
+- **ReFS clone cleanup:** remove ordinary partial output when Windows rejects the ignore-readonly deletion flag. Keep readonly attributes intact and include cleanup failures in the original clone error; readonly files or other processes' open handles can still leave output behind. ([#648](https://github.com/openclaw/fs-safe/pull/648))
+
+### Compatibility and documentation
+
+- Secret creation's default and boolean durability options retain their behavior, and `writeSecretFileAtomic()` remains boolean-only. Strict file synchronization preserves existing publication and cleanup semantics: a failure after publication can leave a complete file present. ([#644](https://github.com/openclaw/fs-safe/pull/644))
+- `Root.walk("~")` and `Root.walk("~/dir")` expand home shorthand when iteration starts and return admitted canonical paths relative to the Root. Use `./~/dir` for a literal tilde directory, and prefix returned entry paths with `./` when passing them to another Root method. Relative Root `~/name` inputs still expand home; FileStore keys do not. ([#633](https://github.com/openclaw/fs-safe/pull/633))
+- Guest moves still require OS permission to read mode-000 source directories; they do not widen source permissions. If permission restoration fails after publication, the source and published copy remain for caller reconciliation. ([#616](https://github.com/openclaw/fs-safe/pull/616))
+- Clarify that `Root.append()` and `openWritable()` creation modes remain subject to the process umask and do not chmod existing files. This documents existing behavior. ([#636](https://github.com/openclaw/fs-safe/pull/636))
 
 ## 0.18.2 - 2026-09-22
 

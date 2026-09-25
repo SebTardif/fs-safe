@@ -353,6 +353,30 @@ fn rename_nt_error(status: i32, operation: &str) -> napi::Error<String> {
     rename_win_error(unsafe { RtlNtStatusToDosError(status) }, operation)
 }
 
+/// # Safety
+/// `T` must be the initialized fixed-size input record for `class`, with a size
+/// fitting u32. The API may read it only for the duration of this call.
+#[inline(always)]
+pub(crate) unsafe fn set_file_information<T>(
+    handle: HANDLE,
+    class: windows_sys::Win32::Storage::FileSystem::FILE_INFO_BY_HANDLE_CLASS,
+    info: &T,
+) -> std::result::Result<(), u32> {
+    // SAFETY: the caller admits the class/layout pair; the borrowed record stays live.
+    let ok = unsafe {
+        SetFileInformationByHandle(
+            handle,
+            class,
+            (info as *const T).cast(),
+            size_of::<T>() as u32,
+        )
+    };
+    if ok == 0 {
+        return Err(unsafe { GetLastError() });
+    }
+    Ok(())
+}
+
 fn handle_attribute_tag_information(
     handle: HANDLE,
     operation: &str,
@@ -1010,32 +1034,41 @@ pub(crate) fn list_directory_entries(directory: HANDLE) -> NativeResult<Vec<(Str
     Ok(entries)
 }
 
+const OWNED_DELETE_FLAGS: u32 = FILE_DISPOSITION_FLAG_DELETE
+    | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS
+    | FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE;
+
+fn set_delete_disposition(handle: HANDLE, flags: u32) -> std::result::Result<(), u32> {
+    let info = FILE_DISPOSITION_INFO_EX { Flags: flags };
+    // SAFETY: FILE_DISPOSITION_INFO_EX is the initialized record for this class.
+    unsafe { set_file_information(handle, FileDispositionInfoEx, &info) }
+}
+
 pub(crate) fn mark_handle_for_deletion(handle: HANDLE) -> NativeResult<()> {
-    let info = FILE_DISPOSITION_INFO_EX {
-        Flags: FILE_DISPOSITION_FLAG_DELETE
-            | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS
-            | FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE,
-    };
-    let ok = unsafe {
-        SetFileInformationByHandle(
-            handle,
-            FileDispositionInfoEx,
-            (&info as *const FILE_DISPOSITION_INFO_EX).cast(),
-            size_of::<FILE_DISPOSITION_INFO_EX>() as u32,
-        )
-    };
-    if ok == 0 {
-        return Err(win_error(
-            unsafe { GetLastError() },
-            "remove owned tree handle",
-        ));
+    set_delete_disposition(handle, OWNED_DELETE_FLAGS)
+        .map_err(|code| win_error(code, "remove owned tree handle"))
+}
+
+pub(crate) fn mark_clone_handle_for_deletion(handle: HANDLE) -> NativeResult<()> {
+    clone_delete_disposition(|flags| set_delete_disposition(handle, flags))
+        .map_err(|code| win_error(code, "remove owned tree handle"))
+}
+
+fn clone_delete_disposition(
+    mut set: impl FnMut(u32) -> std::result::Result<(), u32>,
+) -> std::result::Result<(), u32> {
+    match set(OWNED_DELETE_FLAGS) {
+        // Some ReFS versions reject IGNORE_READONLY even on writable objects.
+        // Never repair attributes: a target may have acquired an outside hardlink.
+        Err(ERROR_NOT_SUPPORTED) => set(FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS),
+        result => result,
     }
-    Ok(())
 }
 
 fn remove_directory_handle_with_hook(
     directory: HANDLE,
     before_child_open: &mut impl FnMut(&str),
+    mark: fn(HANDLE) -> NativeResult<()>,
 ) -> NativeResult<()> {
     let parent_volume = handle_identity(directory)?.0;
     for (name, attributes, file_id) in list_directory_entries(directory)? {
@@ -1065,15 +1098,18 @@ fn remove_directory_handle_with_hook(
             ));
         }
         if traverse {
-            remove_directory_handle_with_hook(child.0, before_child_open)?;
+            remove_directory_handle_with_hook(child.0, before_child_open, mark)?;
         }
-        mark_handle_for_deletion(child.0)?;
+        mark(child.0)?;
     }
     Ok(())
 }
 
-pub(crate) fn remove_directory_handle(directory: HANDLE) -> NativeResult<()> {
-    remove_directory_handle_with_hook(directory, &mut |_| {})
+pub(crate) fn remove_directory_handle(
+    directory: HANDLE,
+    mark: fn(HANDLE) -> NativeResult<()>,
+) -> NativeResult<()> {
+    remove_directory_handle_with_hook(directory, &mut |_| {}, mark)
 }
 
 fn remove_owned_tree_handles_with_hook(
@@ -1098,7 +1134,7 @@ fn remove_owned_tree_handles_with_hook(
     if handle_is_reparse(owned.0)? || !same_handle_identity(expected, owned.0)? {
         return Ok("preserved".to_owned());
     }
-    remove_directory_handle(owned.0)?;
+    remove_directory_handle(owned.0, mark_handle_for_deletion)?;
     before_root_delete();
     mark_handle_for_deletion(owned.0)?;
     Ok("removed".to_owned())
@@ -1644,6 +1680,86 @@ mod tests {
     }
 
     #[test]
+    fn fixed_information_setter_captures_raw_errors_before_caller_mapping() {
+        use windows_sys::Win32::Foundation::{ERROR_INVALID_HANDLE, SetLastError};
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_BASIC_INFO, FILE_END_OF_FILE_INFO, FileBasicInfo, FileEndOfFileInfo,
+        };
+
+        let basic = FILE_BASIC_INFO::default();
+        let eof = FILE_END_OF_FILE_INFO { EndOfFile: 0 };
+        let disposition = FILE_DISPOSITION_INFO_EX { Flags: 0 };
+        // SAFETY: each initialized input matches its class and remains live.
+        let errors = unsafe {
+            SetLastError(ERROR_ACCESS_DENIED);
+            let basic = set_file_information(INVALID_HANDLE_VALUE, FileBasicInfo, &basic).unwrap_err();
+            SetLastError(ERROR_FILE_NOT_FOUND);
+            let eof = set_file_information(INVALID_HANDLE_VALUE, FileEndOfFileInfo, &eof).unwrap_err();
+            SetLastError(ERROR_DISK_FULL);
+            let disposition =
+                set_file_information(INVALID_HANDLE_VALUE, FileDispositionInfoEx, &disposition)
+                    .unwrap_err();
+            SetLastError(ERROR_SHARING_VIOLATION);
+            [basic, eof, disposition]
+        };
+        assert_eq!(errors, [ERROR_INVALID_HANDLE; 3]);
+        let error = mark_handle_for_deletion(INVALID_HANDLE_VALUE).unwrap_err();
+        assert_eq!(error.status, "EIO");
+        assert_eq!(
+            error.reason,
+            format!("remove owned tree handle failed with Windows error {ERROR_INVALID_HANDLE}"),
+        );
+    }
+
+    #[test]
+    fn fixed_information_setter_preserves_input_records_and_borrowed_handle() {
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_NORMAL, FILE_BASIC_INFO, FILE_END_OF_FILE_INFO, FileBasicInfo,
+            FileEndOfFileInfo,
+        };
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "fs-safe-fixed-setter-{}-{nonce}",
+            std::process::id(),
+        ));
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        let handle = file.as_raw_handle();
+        let basic = FILE_BASIC_INFO {
+            FileAttributes: FILE_ATTRIBUTE_NORMAL,
+            ..Default::default()
+        };
+        let eof = FILE_END_OF_FILE_INFO { EndOfFile: 37 };
+        // SAFETY: both initialized inputs match their classes and remain borrowed.
+        unsafe {
+            set_file_information(handle, FileEndOfFileInfo, &eof).unwrap();
+            set_file_information(handle, FileBasicInfo, &basic).unwrap();
+        }
+        assert_eq!(eof.EndOfFile, 37);
+        assert_eq!(basic.FileAttributes, FILE_ATTRIBUTE_NORMAL);
+        assert_eq!(
+            (
+                basic.CreationTime,
+                basic.LastAccessTime,
+                basic.LastWriteTime,
+                basic.ChangeTime
+            ),
+            (0, 0, 0, 0)
+        );
+        assert_eq!(file.metadata().unwrap().len(), 37);
+        drop(file);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn stable_file_identity_uses_volume_and_all_128_file_id_bits() {
         let identity = HandleFileIdentity {
             volume_serial_number: 7,
@@ -1728,6 +1844,28 @@ mod tests {
     }
 
     #[test]
+    fn clone_deletion_retries_only_unsupported_readonly_flags() {
+        for first in [Ok(()), Err(5), Err(32), Err(87)] {
+            let mut flags = Vec::new();
+            let result = clone_delete_disposition(|value| {
+                flags.push(value);
+                first
+            });
+            assert_eq!(result, first);
+            assert_eq!(flags, [0x13]);
+        }
+        for second in [Ok(()), Err(5), Err(32)] {
+            let mut flags = Vec::new();
+            let result = clone_delete_disposition(|value| {
+                flags.push(value);
+                if flags.len() == 1 { Err(50) } else { second }
+            });
+            assert_eq!(result, second);
+            assert_eq!(flags, [0x13, 0x03]);
+        }
+    }
+
+    #[test]
     fn reparse_leaf_open_requires_a_direct_child() {
         for name in ["", ".", "..", "nested/child", "nested\\child"] {
             let result = nt_open_relative_with_policy(
@@ -1762,6 +1900,7 @@ mod tests {
                 fs::rename(root.join("nested"), root.join("original")).unwrap();
                 fs::write(root.join("nested"), b"replacement").unwrap();
             },
+            mark_handle_for_deletion,
         )
         .unwrap_err();
         assert_eq!(error.status, "path-mismatch");
@@ -1801,6 +1940,7 @@ mod tests {
                     fs::write(workspace.join("nested/keep"), b"replacement").unwrap();
                 }
             },
+            mark_handle_for_deletion,
         )
         .unwrap_err();
         assert_eq!(error.status, "path-mismatch");

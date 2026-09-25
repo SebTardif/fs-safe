@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { assertSyncDirectoryGuard, createSyncDirectoryGuard, type SyncDirectoryGuard } from "./directory-guard.js";
 import { sameFileIdentity } from "./file-identity.js";
 import { guardedRenameSync, guardedRmSync } from "./guarded-mutation.js";
 import { realpathSync } from "./realpath.js";
@@ -69,6 +70,7 @@ function resolveAllowedTrashRoots(allowedRoots: readonly string[]): string[] {
 }
 
 type TrashTargetGuard = {
+  parent: SyncDirectoryGuard;
   path: string;
   realPath: string;
   realPathResolved: boolean;
@@ -127,7 +129,12 @@ function assertAllowedTrashTarget(
   if (!isAllowed) {
     throw new Error(`Refusing to trash path outside allowed roots: ${targetPath}`);
   }
+  const parent = createSyncDirectoryGuard(path.dirname(lexicalTarget));
+  if (parent.realPath !== resolvedParent) {
+    throw new Error(`Refusing to trash path after it changed: ${targetPath}`);
+  }
   return {
+    parent,
     path: lexicalTarget,
     realPath: resolvedTargetPath,
     realPathResolved: resolvedTarget.resolved,
@@ -136,6 +143,7 @@ function assertAllowedTrashTarget(
 }
 
 function assertTrashTargetGuard(guard: TrashTargetGuard): void {
+  assertSyncDirectoryGuard(guard.parent);
   const stat = fs.lstatSync(guard.path);
   if (!sameFileIdentity(stat, guard.stat)) {
     throw new Error(`Refusing to trash path after it changed: ${guard.path}`);

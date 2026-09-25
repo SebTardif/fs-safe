@@ -1,12 +1,17 @@
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { movePathToTrash } from "../src/trash.js";
+import { __setFsSafeTestHooksForTest } from "../src/test-hooks.js";
 import { itPosix, useRealTempDirs } from "./helpers/vitest.js";
 
 const { tempRoot } = useRealTempDirs();
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  __setFsSafeTestHooksForTest(undefined);
+});
 
 itPosix("rejects an outside symlink that points at a file inside an allowed root", async () => {
   const sandbox = await tempRoot("fs-safe-trash-pointer-sandbox-");
@@ -67,4 +72,24 @@ it("trashes a normal file inside an allowed root", async () => {
   const destination = await movePathToTrash(source, { allowedRoots: [sandbox] });
   await expect(fs.readFile(destination, "utf8")).resolves.toBe("contained bytes");
   await expect(fs.lstat(source)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+itPosix("retains admission when an ancestor moves the same dangling entry outside", async () => {
+  const sandbox = await tempRoot("fs-safe-trash-parent-guard-");
+  const outside = await tempRoot("fs-safe-trash-parent-guard-outside-");
+  vi.spyOn(os, "homedir").mockReturnValue(sandbox);
+  const ancestor = path.join(sandbox, "ancestor");
+  const parent = path.join(ancestor, "parent");
+  const moved = path.join(outside, "moved");
+  await fs.mkdir(parent, { recursive: true });
+  await fs.symlink("missing", path.join(parent, "broken"));
+  __setFsSafeTestHooksForTest({
+    beforeTrashMove() {
+      fsSync.renameSync(ancestor, moved);
+      fsSync.symlinkSync(moved, ancestor, "dir");
+    },
+  });
+  await expect(movePathToTrash(path.join(parent, "broken"), { allowedRoots: [sandbox] }))
+    .rejects.toThrow();
+  expect(await fs.readlink(path.join(moved, "parent", "broken"))).toBe("missing");
 });

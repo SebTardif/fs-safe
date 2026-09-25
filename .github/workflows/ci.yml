@@ -930,7 +930,7 @@ jobs:
 
   check:
     name: Node ${{ matrix.node }} check (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'windows-latest' && 'fs-safe-windows-16core' || matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -945,6 +945,10 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify Windows CI runner
+        if: matrix.os == 'windows-latest'
+        uses: ./.github/actions/verify-windows-ci-runner
 
       - name: Set up pnpm
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -1003,7 +1007,7 @@ jobs:
 
   native-check:
     name: Native check (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'windows-latest' && 'fs-safe-windows-16core' || matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -1015,6 +1019,10 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify Windows CI runner
+        if: matrix.os == 'windows-latest'
+        uses: ./.github/actions/verify-windows-ci-runner
 
       - name: Set up pnpm
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -1186,7 +1194,7 @@ jobs:
       - name: Test Windows descriptor ACL admission with required native binding
         env:
           FS_SAFE_NATIVE_MODE: require
-        run: pnpm test test/secure-file-windows-descriptor.test.ts test/secure-file-windows-native.test.ts
+        run: pnpm test test/secure-file-windows-descriptor.test.ts test/secure-file-windows-native.test.ts test/owner-dacl-batch.windows.test.ts
 
       - name: Test Windows owner benchmark control with required native binding
         if: runner.os == 'Windows'
@@ -1211,7 +1219,7 @@ jobs:
       - name: Test native security and path equivalence
         env:
           FS_SAFE_PAX_REQUIRE_NATIVE: "1"
-        run: pnpm test test/native-integration.test.ts test/native-owned-tree.test.ts test/native-write-containment.test.ts test/native-staging-regression.test.ts test/staged-file.test.ts test/staged-file-failures.test.ts test/native-archive-equivalence.test.ts test/native-publish-equivalence.test.ts test/private-directory.test.ts test/archive-unified.test.ts test/archive-wasm-abi.test.ts test/archive-pax.test.ts test/archive-pax-security.test.ts test/archive-pax-decimal.test.ts test/archive-pax-raw-admission.test.ts test/archive-pax-compressed.test.ts test/archive-tar-strip.test.ts test/archive-tar-framing.test.ts test/archive-tar-framing-compressed.test.ts test/archive-gzip-integrity.test.ts test/archive-gzip-container.test.ts test/temp-workspace-cleanup-ownership.test.ts test/temp-workspace-cleanup-admission.test.ts test/temp-workspace-cleanup-capability.test.ts test/temp-workspace-cleanup-descriptor-access.test.ts
+        run: pnpm test test/native-integration.test.ts test/native-unix-descriptor-admission.test.ts test/native-owned-tree.test.ts test/native-write-containment.test.ts test/native-staging-regression.test.ts test/staged-file.test.ts test/staged-file-failures.test.ts test/staged-symlink.test.ts test/staged-symlink-error-settlement.test.ts test/native-archive-equivalence.test.ts test/native-publish-equivalence.test.ts test/private-directory.test.ts test/archive-unified.test.ts test/archive-wasm-abi.test.ts test/archive-pax.test.ts test/archive-pax-security.test.ts test/archive-pax-decimal.test.ts test/archive-pax-raw-admission.test.ts test/archive-pax-compressed.test.ts test/archive-tar-strip.test.ts test/archive-tar-framing.test.ts test/archive-tar-framing-compressed.test.ts test/archive-gzip-integrity.test.ts test/archive-gzip-container.test.ts test/temp-workspace-cleanup-ownership.test.ts test/temp-workspace-cleanup-admission.test.ts test/temp-workspace-cleanup-capability.test.ts test/temp-workspace-cleanup-descriptor-access.test.ts
 
       - name: Test native Root publication verification
         env:
@@ -1270,7 +1278,7 @@ jobs:
             FS_SAFE_NATIVE_MODE=require pnpm test test/file-hash-options.test.ts
             node scripts/sidecar-contention-proof.mjs require
             FS_SAFE_NATIVE_MODE=require pnpm test test/root-create-only-preflight.test.ts test/sidecar-lock-root-admission.test.ts test/sidecar-lock-root-ancestry.test.ts test/sidecar-lock-root-budget.test.ts test/sidecar-lock-root-resolver.test.ts test/sidecar-lock-root-unlink.test.ts test/sidecar-lock-unlink-siblings.test.ts test/file-lock-sync-stale.test.ts test/file-lock-sync-release.test.ts
-            FS_SAFE_PAX_REQUIRE_NATIVE=1 pnpm test test/native-owned-tree.test.ts test/native-write-containment.test.ts test/native-staging-regression.test.ts test/staged-file.test.ts test/staged-file-failures.test.ts test/native-archive-equivalence.test.ts test/native-publish-equivalence.test.ts test/archive-unified.test.ts test/archive-wasm-abi.test.ts test/archive-pax.test.ts test/archive-pax-security.test.ts test/archive-pax-decimal.test.ts test/archive-pax-raw-admission.test.ts test/archive-pax-compressed.test.ts test/archive-tar-strip.test.ts test/archive-tar-framing.test.ts test/archive-tar-framing-compressed.test.ts test/archive-gzip-integrity.test.ts test/archive-gzip-container.test.ts
+            FS_SAFE_PAX_REQUIRE_NATIVE=1 pnpm test test/native-unix-descriptor-admission.test.ts test/native-owned-tree.test.ts test/native-write-containment.test.ts test/native-staging-regression.test.ts test/staged-file.test.ts test/staged-file-failures.test.ts test/staged-symlink.test.ts test/staged-symlink-error-settlement.test.ts test/native-archive-equivalence.test.ts test/native-publish-equivalence.test.ts test/archive-unified.test.ts test/archive-wasm-abi.test.ts test/archive-pax.test.ts test/archive-pax-security.test.ts test/archive-pax-decimal.test.ts test/archive-pax-raw-admission.test.ts test/archive-pax-compressed.test.ts test/archive-tar-strip.test.ts test/archive-tar-framing.test.ts test/archive-tar-framing-compressed.test.ts test/archive-gzip-integrity.test.ts test/archive-gzip-container.test.ts
             FS_SAFE_NATIVE_MODE=require pnpm test test/root-write-mode.test.ts test/root-write-verification.test.ts test/root-write-lifetime.test.ts test/root-write-exact-identity.test.ts test/secret-write-publication.test.ts test/secret-write-preparation.test.ts test/native-write-mode-ownership.test.ts test/native-created-cleanup.test.ts test/file-mode-facades.test.ts test/native-private-creation.test.ts
             FS_SAFE_NATIVE_MODE=require pnpm test test/root-copy-options.test.ts test/root-copy-read-identity.test.ts test/root-copy-symlink-policy.test.ts test/root-copy-windows-publication.test.ts test/root-parent-symlink-policy.test.ts test/root-mutation-authority.test.ts test/root-mutation-dispatch.test.ts test/native-mutation-policy-admission.test.ts test/native-mutation-policy-integration.test.ts test/pinned-mutation-receipt-walk.test.ts test/root-shared-js-mutation-policy.test.ts test/root-windows-legacy-policy-boundaries.test.ts
             FS_SAFE_NATIVE_MODE=require pnpm test test/archive-zip-admission.test.ts test/archive-zip-metadata.test.ts test/archive-zip-integrity.test.ts
@@ -1314,7 +1322,7 @@ jobs:
 
   package-smoke:
     name: Bundled package smoke (${{ matrix.os }}, Node ${{ matrix.node }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'windows-latest' && 'fs-safe-windows-16core' || matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -1333,6 +1341,10 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Verify Windows CI runner
+        if: matrix.os == 'windows-latest'
+        uses: ./.github/actions/verify-windows-ci-runner
 
       - name: Set up pnpm
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0

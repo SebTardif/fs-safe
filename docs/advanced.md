@@ -240,6 +240,7 @@ atomic replacement, use [`Root.write()`](writing.md).
 | Export | Page | Notes |
 |---|---|---|
 | `stageFileInDirectory`, `StagedFile`, `StagedFileReceipt`, `PublishedFileReceipt`, `StagedFilePublication`, `StagedFileCleanupReceipt`, `StagedFileFailureDetails` | [staged-file.md](staged-file.md) | Native-required Linux/macOS lifecycle retaining the original directory for abort cleanup. |
+| `retainSymlinkInDirectory`, `StagedSymlink`, `StagedSymlinkExpected`, `StagedSymlinkReceipt`, `PublishedSymlinkReceipt`, `StagedSymlinkPublication`, `StagedSymlinkRemoval`, `StagedSymlinkCleanupReceipt`, `StagedSymlinkFailureDetails` | [staged-symlink.md](staged-symlink.md) | Native-required retained symlink identity, no-replace publication and explicit recovery; never same-target ownership adoption. |
 | `tempFile`, `withTempFile`, `TempFile`, `buildRandomTempFilePath`, `sanitizeTempFileName` | [temp.md](temp.md) | One-file temp primitive; prefer `tempWorkspace` from `@openclaw/fs-safe/temp` for the stable surface. |
 | `writeSiblingTempFile`, `writeViaSiblingTempPath`, `WriteSiblingTempFileOptions`, `WriteSiblingTempFileResult` | – | Callback-produced file staging: verified sibling publication or private-workspace copy through a root. |
 
@@ -256,7 +257,7 @@ atomic replacement, use [`Root.write()`](writing.md).
 |---|---|---|
 | `createAsyncLock` | – | In-process async lock (separate from cross-process file locks). |
 | `withTimeout` | [timing.md](timing.md) | Wrap a promise with a timeout that raises `Error` by default, or an error supplied by `createError`. |
-| `movePathToTrash`, `MovePathToTrashOptions` | – | Best-effort move to the platform trash. |
+| `movePathToTrash`, `MovePathToTrashOptions` | – | Best-effort move to the platform trash. Allowed roots constrain the real parent of the moved entry, including symlinks; the referent is not moved. Parent identity is rechecked before mutation. |
 
 ## Stability
 
