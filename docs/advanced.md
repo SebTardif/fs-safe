@@ -80,7 +80,7 @@ Operational filesystem failures such as permissions or I/O errors are rethrown.
 | `sameFileIdentity`, `FileIdentityStat` | – | Compare two stats for same-inode equality. |
 | `readDirectoryIdentity`, `assertDirectoryIdentitySync`, `DirectoryIdentity` | [directory-identity.md](directory-identity.md) | Observe exact bigint directory identity and synchronously check a caller-selected path, optionally retaining its canonical path. |
 | `pathExists`, `pathExistsSync` | – | Boolean existence check that does not throw on `ENOENT`. |
-| `assertNoSymlinkParents`, `assertNoSymlinkParentsSync`, `AssertNoSymlinkParentsOptions` | – | Reject paths whose ancestor chain contains symlinks. |
+| `assertNoSymlinkParents`, `assertNoSymlinkParentsSync`, `AssertNoSymlinkParentsOptions` | – | Reject paths whose ancestor chain contains symlinks, inspecting raw segments before `..` normalization. A `..` may undo an inspected real directory, but cannot leave the root or undo an allowed root-child symlink. Raw paths outside the root that normalize inside are rejected. |
 | `assertNoHardlinkedFinalPath`, `assertNoPathAliasEscape`, `PATH_ALIAS_POLICIES`, `PathAliasPolicy` | – | Hardlink/alias defense building blocks. |
 
 `pathExists()` and `pathExistsSync()` intentionally retain ordinary `stat`
@@ -240,6 +240,7 @@ atomic replacement, use [`Root.write()`](writing.md).
 | Export | Page | Notes |
 |---|---|---|
 | `stageFileInDirectory`, `StagedFile`, `StagedFileReceipt`, `PublishedFileReceipt`, `StagedFilePublication`, `StagedFileCleanupReceipt`, `StagedFileFailureDetails` | [staged-file.md](staged-file.md) | Native-required Linux/macOS lifecycle retaining the original directory for abort cleanup. |
+| `retainSymlinkInDirectory`, `StagedSymlink`, `StagedSymlinkExpected`, `StagedSymlinkReceipt`, `PublishedSymlinkReceipt`, `StagedSymlinkPublication`, `StagedSymlinkRemoval`, `StagedSymlinkCleanupReceipt`, `StagedSymlinkFailureDetails` | [staged-symlink.md](staged-symlink.md) | Native-required retained symlink identity, no-replace publication and explicit recovery; never same-target ownership adoption. |
 | `tempFile`, `withTempFile`, `TempFile`, `buildRandomTempFilePath`, `sanitizeTempFileName` | [temp.md](temp.md) | One-file temp primitive; prefer `tempWorkspace` from `@openclaw/fs-safe/temp` for the stable surface. |
 | `writeSiblingTempFile`, `writeViaSiblingTempPath`, `WriteSiblingTempFileOptions`, `WriteSiblingTempFileResult` | – | Callback-produced file staging: verified sibling publication or private-workspace copy through a root. |
 

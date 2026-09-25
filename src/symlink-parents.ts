@@ -21,65 +21,23 @@ function outsideRootError(params: AssertNoSymlinkParentsOptions, root: string): 
   return new Error(`${params.messagePrefix ?? "Path"} must stay under ${root}.`);
 }
 
-function absolutePreservingDotDot(targetPath: string): string {
-  if (path.isAbsolute(targetPath)) {
-    return process.platform === "win32" ? targetPath.replaceAll("/", "\\") : targetPath;
-  }
-  if (process.platform === "win32" && /^[A-Za-z]:/.test(targetPath)) {
-    const base = path.win32.resolve(targetPath.slice(0, 2));
-    const suffix = targetPath.slice(2).replaceAll("/", "\\").replace(/^\\+/, "");
-    if (suffix.length === 0) return base;
-    return base.endsWith("\\") ? `${base}${suffix}` : `${base}\\${suffix}`;
-  }
-  const cwd = process.cwd();
-  if (targetPath.length === 0) return cwd;
-  const suffix = process.platform === "win32" ? targetPath.replaceAll("/", "\\") : targetPath;
-  return cwd.endsWith(path.sep) ? `${cwd}${suffix}` : `${cwd}${path.sep}${suffix}`;
+function pathSegments(value: string): string[] {
+  return value.split(process.platform === "win32" ? /[/\\]+/ : /\/+/)
+    .filter((segment) => segment.length > 0 && segment !== ".");
 }
 
-function trimTrailingSeparators(value: string): string {
-  const root = path.parse(value).root;
-  let end = value.length;
-  while (end > root.length && (value[end - 1] === "/" || value[end - 1] === "\\")) {
-    end -= 1;
+function rawTargetSegments(root: string, targetPath: string): string[] | undefined {
+  // Resolve only the drive/root or cwd, never the caller's dotdot segments.
+  const targetRoot = path.parse(targetPath).root;
+  const base = resolvePathPreservingWindowsRoot(targetRoot || ".");
+  const absoluteTarget = `${base}${path.sep}${targetPath.slice(targetRoot.length)}`;
+  const rootSegments = pathSegments(root);
+  const targetSegments = pathSegments(absoluteTarget);
+  const fold = (segment: string) => process.platform === "win32" ? segment.toLowerCase() : segment;
+  if (rootSegments.some((segment, index) => fold(segment) !== fold(targetSegments[index] ?? ""))) {
+    return undefined;
   }
-  return end === value.length ? value : value.slice(0, end);
-}
-
-function samePath(left: string, right: string): boolean {
-  return process.platform === "win32"
-    ? left.toLowerCase() === right.toLowerCase()
-    : left === right;
-}
-
-function hasPathPrefix(value: string, prefix: string): boolean {
-  return process.platform === "win32"
-    ? value.toLowerCase().startsWith(prefix.toLowerCase())
-    : value.startsWith(prefix);
-}
-
-function rawTargetSegments(root: string, targetPath: string, lexicalRelative: string): string[] {
-  const normalizedRoot = trimTrailingSeparators(root);
-  const absoluteTarget = trimTrailingSeparators(absolutePreservingDotDot(targetPath));
-  if (samePath(absoluteTarget, normalizedRoot)) return [];
-  const rootBoundary = normalizedRoot.endsWith(path.sep)
-    ? normalizedRoot
-    : `${normalizedRoot}${path.sep}`;
-  let suffix: string | undefined;
-  if (hasPathPrefix(absoluteTarget, rootBoundary)) {
-    suffix = absoluteTarget.slice(rootBoundary.length);
-  } else if (
-    normalizedRoot === path.parse(normalizedRoot).root &&
-    hasPathPrefix(absoluteTarget, normalizedRoot)
-  ) {
-    suffix = absoluteTarget.slice(normalizedRoot.length);
-  }
-  if (suffix === undefined) {
-    if (!lexicalRelative || lexicalRelative === ".") return [];
-    return lexicalRelative.split(path.sep).filter((segment) => segment.length > 0);
-  }
-  const parts = process.platform === "win32" ? suffix.split(/[/\\]+/) : suffix.split(/\/+/);
-  return parts.filter((segment) => segment.length > 0 && segment !== ".");
+  return targetSegments.slice(rootSegments.length);
 }
 
 function resolvePathWalk(params: AssertNoSymlinkParentsOptions): {
@@ -107,10 +65,11 @@ function resolvePathWalk(params: AssertNoSymlinkParentsOptions): {
     }
     throw outsideRootError(params, root);
   }
-  return {
-    root,
-    segments: rawTargetSegments(root, rawTargetPath, relative),
-  };
+  const segments = rawTargetSegments(root, rawTargetPath);
+  // A spelling outside the root must not fall back to a normalized walk that
+  // could erase a symlink before the filesystem receives the original path.
+  if (!segments) throw outsideRootError(params, root);
+  return { root, segments };
 }
 
 function formatUnsafePath(params: AssertNoSymlinkParentsOptions, current: string): string {
@@ -176,6 +135,14 @@ export function assertNoSymlinkParentsSync(
       }
     } catch (err) {
       if (hasNodeErrorCode(err, "ENOENT") && params.allowMissing !== false) {
+        // Win32 can cancel a nonexistent component before filesystem lookup.
+        // Returning early would leave later, reachable symlinks unchecked.
+        if (process.platform === "win32" && walk.segments.slice(index + 1).includes("..")) {
+          throw new FsSafeError(
+            "invalid-path",
+            `${params.messagePrefix ?? "Path"} must not cancel a missing directory: ${current}`,
+          );
+        }
         return;
       }
       throw err;

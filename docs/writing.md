@@ -211,6 +211,11 @@ can establish them; native disposal can retain them inside a `SuppressedError`
 cause. Preserve those details when handling errors: a rejection can follow
 complete publication, and an indeterminate link or native rename must preserve names for
 recovery. A cleanup or close failure also retains the original operation failure.
+The JavaScript fallback checks the destination again immediately before attempting
+publication. A collision observed there leaves publication unattempted and cleans
+the owned stage. A later collision or other error from the link call remains
+indeterminate, including `EEXIST`; the error code alone does not prove that the
+filesystem left both names unchanged.
 No later verification, mode, or synchronization failure authorizes deleting an
 already published complete destination. See [receipt meanings](staged-file.md).
 
@@ -300,6 +305,12 @@ type RootWriteJsonOptions = RootWriteOptions & {
 ### `fs.append(rel, data, options?)`
 
 Open in append mode, write, sync the file handle, and close. Honors `mkdir` for the parent directory and syncs the parent directory when the append creates the file. `durable: false` skips both syncs. Pass `prependNewlineIfNeeded: true` to insert a `\n` if the file does not already end in one.
+
+`mode` selects the creation mode, defaulting to `0o600` when neither the call nor
+the Root supplies it. On POSIX, the process umask can further restrict that mode;
+for example, `mode: 0o640` with umask `0o077` creates a `0o600` file. Existing
+files are not chmodded, even when an explicit `mode` is supplied. Empty appends
+use the same creation rules.
 
 ```ts
 await fs.append("logs/today.log", `[${ts}] ${line}\n`);
@@ -521,6 +532,11 @@ files; `update` keeps existing contents. Streaming writes go directly to the
 destination — there is no atomic-rename step. For exclusive publication of a
 complete stream, use [`create()`](#streamed-creation). For streamed replacement,
 the [`atomic`](atomic.md) helpers provide a staged writer.
+
+For all three write modes, `mode` only selects new-file creation permissions,
+defaulting to `0o600` when neither the call nor the Root supplies it. POSIX
+permissions remain subject to the process umask; existing files are not chmodded.
+The returned numeric `stat` records the admitted descriptor before caller writes.
 
 On POSIX, existing-target opens use `O_NONBLOCK` as an admission safeguard so
 a no-reader FIFO cannot stall regular-file validation. This does not change
