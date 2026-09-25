@@ -26,9 +26,11 @@ describe("isPathRelativeEscape", () => {
   });
 
   it("recognizes both Windows separators with native Windows path operations", () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    vi.spyOn(path, "isAbsolute").mockImplementation(path.win32.isAbsolute);
-    vi.spyOn(path, "sep", "get").mockReturnValue("\\");
+    if (process.platform !== "win32") {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      vi.spyOn(path, "isAbsolute").mockImplementation(path.win32.isAbsolute);
+      vi.spyOn(path, "sep", "get").mockReturnValue("\\");
+    }
     for (const input of ["../secret", "..\\secret", "foo/..\\../secret", "C:/secret"]) {
       expect(isPathRelativeEscape(input), input).toBe(true);
     }
