@@ -145,11 +145,7 @@ const OPEN_APPEND_CREATE_FLAGS =
   fsConstants.O_EXCL |
   (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
 
-function openResult(params: {
-  handle: FileHandle;
-  realPath: string;
-  stat: Stats;
-}): OpenResult {
+function openResult(params: Pick<OpenResult, "handle" | "realPath" | "stat">): OpenResult {
   return {
     handle: params.handle,
     containment: "best-effort",
@@ -276,14 +272,12 @@ export interface Root {
 }
 
 export class RootHandle implements Root {
-  private readonly context: RootContext;
   readonly rootDir: string;
   readonly rootReal: string;
   readonly rootWithSep: string;
   readonly defaults: RootDefaults;
 
-  constructor(context: RootContext, defaults: RootDefaults = {}) {
-    this.context = context;
+  constructor(private readonly context: RootContext, defaults: RootDefaults = {}) {
     this.rootDir = context.rootDir;
     this.rootReal = context.rootReal;
     this.rootWithSep = context.rootWithSep;
@@ -685,13 +679,8 @@ function rootWriteQueueKey(root: RootContext, relativePath: string): string {
   return `${root.rootReal}\0${relativePath}`;
 }
 
-type WritableFileInRootParams = {
+type WritableFileInRootParams = Omit<RootOpenWritableOptions, "writeMode"> & {
   relativePath: string;
-  mkdir?: boolean;
-  mode?: number;
-  denyMutations?: DenyMutationPolicy;
-  assertBeforeMutation?: () => void;
-  mutationSymlinks?: MutationSymlinkPolicy;
   truncateExisting?: boolean;
   append?: boolean;
   expectedWritePath?: string;
@@ -1020,7 +1009,6 @@ async function mkdirPathInRoot(
   const prepared = policy && resolved.relativePosix !== ""
     ? await preparePinnedWriteMutationAdmission({
       rootReal: resolved.rootReal,
-      rootWithSep: ensureTrailingSep(resolved.rootReal),
       rootIdentity: root.rootIdentity,
       resolvedTargetPath: resolved.resolved,
       originalPath: params.relativePath,
@@ -1246,13 +1234,10 @@ async function copyFileInRoot(
 
 async function resolvePinnedPathInRoot(
   root: RootContext,
-  params: {
-    relativePath: string;
+  params: Omit<Parameters<typeof resolvePinnedRootPathInRoot>[1], "policy"> & {
     allowRoot?: boolean;
     denyMutations?: DenyMutationPolicy;
-    mutationSymlinks?: MutationSymlinkPolicy;
     remove?: boolean;
-    removalReceipts?: RemovalPathReceipts;
   },
 ): Promise<{ rootReal: string; resolved: string; relativePosix: string }> {
   const resolved = await resolvePinnedRootPathInRoot(root, {
@@ -1300,7 +1285,7 @@ async function resolvePinnedRootPathInRoot(
     mutationSymlinks?: MutationSymlinkPolicy;
     removalReceipts?: RemovalPathReceipts;
   },
-): Promise<{ rootReal: string; rootWithSep: string; canonicalPath: string }> {
+): Promise<{ rootReal: string; canonicalPath: string }> {
   await assertRootIdentityCurrent(root, params.removalReceipts?.observeRoot);
   const rootReal = root.rootReal;
   let resolved;
@@ -1322,10 +1307,8 @@ async function resolvePinnedRootPathInRoot(
     if (err instanceof FsSafeError && err.code === "symlink") throw err;
     throw new FsSafeError("path-alias", "path alias escape blocked", { cause: err });
   }
-  const rootWithSep = ensureTrailingSep(resolved.rootCanonicalPath);
   return {
     rootReal: resolved.rootCanonicalPath,
-    rootWithSep,
     canonicalPath: resolved.canonicalPath,
   };
 }
@@ -1353,9 +1336,7 @@ async function listPathFallback(
 
 async function movePathFallback(
   root: RootContext,
-  params: RootMoveOptions & {
-    fromRelative: string;
-    toRelative: string;
+  params: RootMoveOptions & Parameters<typeof assertMoveMutationAllowed>[1] & {
     overwrite: boolean;
   },
 ): Promise<void> {

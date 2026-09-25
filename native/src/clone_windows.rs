@@ -4,15 +4,18 @@ use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 
+use windows_sys::Wdk::Storage::FileSystem::{
+    FILE_CREATE, FILE_DIRECTORY_FILE, FILE_NO_INTERMEDIATE_BUFFERING, FILE_OPEN,
+};
 use windows_sys::Win32::Foundation::{
     ERROR_HANDLE_EOF, ERROR_MORE_DATA, GetLastError, HANDLE,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
-    FILE_ATTRIBUTE_REPARSE_POINT, FILE_BASIC_INFO, FILE_END_OF_FILE_INFO, FILE_GENERIC_READ,
-    FILE_GENERIC_WRITE, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_STREAM_INFO, FileBasicInfo,
-    FileEndOfFileInfo, FileStreamInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
-    GetVolumeInformationByHandleW, SetFileInformationByHandle,
+    BY_HANDLE_FILE_INFORMATION, DELETE as DELETE_ACCESS, FILE_ATTRIBUTE_DIRECTORY,
+    FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_BASIC_INFO, FILE_END_OF_FILE_INFO,
+    FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_STREAM_INFO,
+    FileBasicInfo, FileEndOfFileInfo, FileStreamInfo, GetFileInformationByHandle,
+    GetFileInformationByHandleEx, GetVolumeInformationByHandleW,
 };
 use windows_sys::Win32::System::IO::DeviceIoControl;
 use windows_sys::Win32::System::Ioctl::{
@@ -24,16 +27,11 @@ use windows_sys::Win32::System::Ioctl::{
 
 use crate::windows::{
     OwnedHandle, ReparsePolicy, duplicate_handle, handle_identity, handle_is_reparse, list_directory_entries,
-    mark_handle_for_deletion, nt_open_relative_with_policy, nt_open_relative_with_sharing,
-    remove_directory_handle, root_handle, win_error,
+    mark_clone_handle_for_deletion, nt_open_relative_with_policy, nt_open_relative_with_sharing,
+    remove_directory_handle, root_handle, set_file_information, win_error,
 };
 use crate::{NativeResult, native_error};
 
-const DELETE_ACCESS: u32 = 0x0001_0000;
-const FILE_OPEN: u32 = 1;
-const FILE_CREATE: u32 = 2;
-const FILE_DIRECTORY_FILE: u32 = 1;
-const FILE_NO_INTERMEDIATE_BUFFERING: u32 = 8;
 const FILE_SUPPORTS_BLOCK_REFCOUNTING: u32 = 0x0800_0000;
 const IO_REPARSE_TAG_MOUNT_POINT: u32 = 0xa000_0003;
 const IO_REPARSE_TAG_SYMLINK: u32 = 0xa000_000c;
@@ -221,21 +219,9 @@ fn set_metadata(handle: HANDLE, mut info: FILE_BASIC_INFO) -> NativeResult<()> {
         info.FileAttributes = FILE_ATTRIBUTE_NORMAL;
     }
     info.ChangeTime = 0;
-    if unsafe {
-        SetFileInformationByHandle(
-            handle,
-            FileBasicInfo,
-            (&info as *const FILE_BASIC_INFO).cast(),
-            size_of::<FILE_BASIC_INFO>() as u32,
-        )
-    } == 0
-    {
-        return Err(win_error(
-            unsafe { GetLastError() },
-            "preserve clone metadata",
-        ));
-    }
-    Ok(())
+    // SAFETY: FILE_BASIC_INFO is the initialized record for this class.
+    unsafe { set_file_information(handle, FileBasicInfo, &info) }
+        .map_err(|code| win_error(code, "preserve clone metadata"))
 }
 
 fn control(
@@ -392,20 +378,9 @@ fn clone_file(job: FileJob, cancelled: &AtomicBool) -> NativeResult<()> {
         let eof = FILE_END_OF_FILE_INFO {
             EndOfFile: size as i64,
         };
-        if unsafe {
-            SetFileInformationByHandle(
-                target.0,
-                FileEndOfFileInfo,
-                (&eof as *const FILE_END_OF_FILE_INFO).cast(),
-                size_of::<FILE_END_OF_FILE_INFO>() as u32,
-            )
-        } == 0
-        {
-            return Err(win_error(
-                unsafe { GetLastError() },
-                "set clone file length",
-            ));
-        }
+        // SAFETY: FILE_END_OF_FILE_INFO is the initialized record for this class.
+        unsafe { set_file_information(target.0, FileEndOfFileInfo, &eof) }
+            .map_err(|code| win_error(code, "set clone file length"))?;
         // ReFS permits the final partial cluster beyond EOF while retaining the exact
         // logical file size. Each request remains below the API's 4 GiB limit.
         let mut offset = 0;
@@ -604,17 +579,23 @@ fn clone_tree_handles(
     )?));
     let target = create_directory(parent_handle, basename)?;
     if let Err(error) = copy_tree(source, target.clone(), cancelled, concurrency) {
-        let cleanup =
-            remove_directory_handle(target.0.0).and_then(|()| mark_handle_for_deletion(target.0.0));
-        return match cleanup {
-            Ok(()) => Err(error),
-            Err(cleanup) => Err(native_error(
-                error.status,
-                format!("{}; remove partial clone: {}", error.reason, cleanup.reason),
-            )),
-        };
+        return Err(cleanup_failed_clone(target, error));
     }
     Ok(())
+}
+
+fn cleanup_failed_clone(target: Arc<Directory>, error: napi::Error<String>) -> napi::Error<String> {
+    let cleanup = remove_directory_handle(target.0.0, mark_clone_handle_for_deletion)
+        .and_then(|()| mark_clone_handle_for_deletion(target.0.0));
+    // Disposition can remain pending until other handles close; settle our owner here.
+    drop(target);
+    match cleanup {
+        Ok(()) => error,
+        Err(cleanup) => native_error(
+            error.status,
+            format!("{}; remove partial clone: {}", error.reason, cleanup.reason),
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -622,9 +603,10 @@ mod tests {
     use super::*;
     use std::fs::{self, File, OpenOptions};
     use std::io::{Read, Seek, SeekFrom, Write};
+    use std::os::windows::ffi::OsStrExt;
     use std::os::windows::fs::OpenOptionsExt;
     use std::os::windows::io::AsRawHandle;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
     use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_WRITE};
     use windows_sys::Win32::System::Ioctl::FSCTL_GET_RETRIEVAL_POINTERS;
@@ -636,6 +618,89 @@ mod tests {
             .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
             .open(path)
             .unwrap()
+    }
+
+    fn assert_missing(path: &Path, error: &napi::Error<String>) {
+        let missing = fs::symlink_metadata(path)
+            .expect_err(&format!("partial clone remains at {path:?}: {error}"));
+        assert_eq!(missing.raw_os_error(), Some(2), "{path:?}: {missing}; {error}");
+    }
+
+    fn rollback_fixture(label: &str) -> (PathBuf, File, Arc<Directory>) {
+        let base = fs::canonicalize(
+            std::env::var_os("FS_SAFE_CLONE_TEST_ROOT").map_or_else(std::env::temp_dir, Into::into),
+        ).unwrap();
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let root = base.join(format!("fs-safe-refs-rollback-{label}-{}-{nonce}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        let parent = directory(&root);
+        let target = create_directory(parent.as_raw_handle(), "partial").unwrap();
+        (root, parent, target)
+    }
+
+    #[test]
+    fn clone_rollback_preserves_readonly_attributes_on_outside_hardlinks() {
+        let (root, parent, target) = rollback_fixture("readonly");
+        let inside = root.join("partial/readonly");
+        let outside = root.join("outside");
+        fs::write(&inside, b"preserve attributes and bytes").unwrap();
+        fs::hard_link(&inside, &outside).unwrap();
+        let mut permissions = fs::metadata(&inside).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&inside, permissions).unwrap();
+
+        let error = cleanup_failed_clone(target, native_error("EBUSY", "original clone failure"));
+        assert_eq!(error.status, "EBUSY", "{error}");
+        assert_eq!(fs::read(&outside).unwrap(), b"preserve attributes and bytes");
+        assert!(fs::metadata(&outside).unwrap().permissions().readonly());
+        match fs::symlink_metadata(root.join("partial")) {
+            Ok(_) => {
+                assert_eq!(error.reason, "original clone failure; remove partial clone: remove owned tree handle failed with Windows error 5");
+                assert!(fs::metadata(&inside).unwrap().permissions().readonly());
+                assert_eq!(fs::read(&inside).unwrap(), b"preserve attributes and bytes");
+            }
+            Err(missing) => {
+                assert_eq!(missing.raw_os_error(), Some(2), "{missing}; {error}");
+                assert_eq!(error.reason, "original clone failure");
+            }
+        }
+        // Both aliases are this test's fixtures; restore only for test teardown.
+        let mut permissions = fs::metadata(&outside).unwrap().permissions();
+        permissions.set_readonly(false);
+        fs::set_permissions(&outside, permissions).unwrap();
+        drop(parent);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn clone_rollback_removes_junction_without_traversing_its_target() {
+        let (root, parent, target) = rollback_fixture("junction");
+        let outside = root.join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("keep"), b"outside sentinel").unwrap();
+        let absolute: Vec<u16> = fs::canonicalize(&outside).unwrap().as_os_str().encode_wide().collect();
+        assert_eq!(&absolute[..4], &[92, 92, 63, 92]);
+        let substitute: Vec<u16> = r"\??\".encode_utf16().chain(absolute[4..].iter().copied()).collect();
+        let name_bytes = u16::try_from(substitute.len() * 2).unwrap();
+        let mut data = Vec::new();
+        data.extend_from_slice(&IO_REPARSE_TAG_MOUNT_POINT.to_le_bytes());
+        data.extend_from_slice(&(8 + name_bytes + 4).to_le_bytes());
+        for field in [0_u16, 0, name_bytes, name_bytes + 2, 0] {
+            data.extend_from_slice(&field.to_le_bytes());
+        }
+        for unit in substitute.into_iter().chain([0, 0]) {
+            data.extend_from_slice(&unit.to_le_bytes());
+        }
+        let junction = create_directory(target.0.0, "junction").unwrap();
+        control(junction.0.0, FSCTL_SET_REPARSE_POINT, data.as_ptr().cast(), data.len() as u32, null_mut(), 0).unwrap();
+        drop(junction);
+
+        let error = cleanup_failed_clone(target, native_error("EBUSY", "original clone failure"));
+        assert_eq!(error.reason, "original clone failure");
+        assert_missing(&root.join("partial"), &error);
+        assert_eq!(fs::read(outside.join("keep")).unwrap(), b"outside sentinel");
+        drop(parent);
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn marker(path: &Path, offset: u64) -> [u8; 16] {
@@ -778,16 +843,20 @@ mod tests {
                 let error =
                     clone_tree_handles(source_handle, parent_handle, "writer-copy", &cancelled, 8)
                         .unwrap_err();
-                assert_eq!(error.status, "EBUSY");
+                assert_eq!(error.status, "EBUSY", "{error}");
                 assert!(error.reason.contains("Windows error 32"), "{error}");
+                assert!(!error.reason.contains("remove partial clone"), "{error}");
+                assert_missing(&root.join("writer-copy"), &error);
             }
-            assert!(!root.join("writer-copy").exists());
+            fs::create_dir(root.join("writer-copy")).unwrap();
+            fs::remove_dir(root.join("writer-copy")).unwrap();
             let named = source_path.join("large:metadata");
             fs::write(&named, b"named stream data").unwrap();
             let error = clone_tree_handles(source_handle, parent_handle, "ads-copy", &cancelled, 8)
                 .unwrap_err();
             assert_eq!(error.status, "ENOTSUP");
-            assert!(!root.join("ads-copy").exists());
+            assert!(!error.reason.contains("remove partial clone"), "{error}");
+            assert_missing(&root.join("ads-copy"), &error);
             assert_eq!(fs::read(&named).unwrap(), b"named stream data");
             assert_eq!(marker(&source_file, size - 16), [19; 16]);
         }

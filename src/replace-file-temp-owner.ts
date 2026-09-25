@@ -111,12 +111,11 @@ async function cleanupOwnedPath(params: {
   }
 }
 
-function cleanupOwnedPathSync(params: {
+function cleanupOwnedPathSync(params: Omit<
+  Parameters<typeof cleanupOwnedPath>[0],
+  "fsModule"
+> & {
   fsModule: SyncOwnerFileSystem;
-  pathname: string;
-  identity?: BigIntStats;
-  originalFailure?: AtomicTempFailure;
-  throwOnCleanupError: boolean;
 }): boolean {
   if (!params.identity) return true;
   try {
@@ -141,14 +140,12 @@ function cleanupOwnedPathSync(params: {
 }
 
 class AtomicTempOwner<Resource> {
-  readonly pathname: string;
   protected resource: Resource | undefined;
   protected recordedIdentity: BigIntStats | undefined;
   protected exists = false;
   protected unregister: TempPathRegistration;
 
-  constructor(pathname: string) {
-    this.pathname = pathname;
+  constructor(readonly pathname: string) {
     this.unregister = registerTempPathForExit(pathname, { singleLinkFile: true });
   }
 
