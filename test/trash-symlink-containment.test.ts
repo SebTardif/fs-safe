@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { movePathToTrash } from "../src/trash.js";
+import * as realpath from "../src/realpath.js";
 import { __setFsSafeTestHooksForTest } from "../src/test-hooks.js";
 import { itPosix, useRealTempDirs } from "./helpers/vitest.js";
 
@@ -71,6 +72,23 @@ it("trashes a normal file inside an allowed root", async () => {
 
   const destination = await movePathToTrash(source, { allowedRoots: [sandbox] });
   await expect(fs.readFile(destination, "utf8")).resolves.toBe("contained bytes");
+  await expect(fs.lstat(source)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("admits equivalent sync and native realpath spellings without dropping the parent guard", async () => {
+  const sandbox = await tempRoot("fs-safe-trash-realpath-spelling-");
+  vi.spyOn(os, "homedir").mockReturnValue(sandbox);
+  const source = path.join(sandbox, "note.txt");
+  await fs.writeFile(source, "contained bytes");
+  const original = realpath.realpathSync;
+  const normalized = vi.spyOn(realpath, "realpathSync").mockImplementation((input) => {
+    const resolved = original(input);
+    return resolved === sandbox ? `${resolved}${path.sep}` : resolved;
+  });
+  Object.assign(normalized, { native: original.native });
+
+  const destination = await movePathToTrash(source, { allowedRoots: [sandbox] });
+  expect(await fs.readFile(destination, "utf8")).toBe("contained bytes");
   await expect(fs.lstat(source)).rejects.toMatchObject({ code: "ENOENT" });
 });
 

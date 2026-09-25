@@ -120,6 +120,7 @@ function assertAllowedTrashTarget(
   const stat = fs.lstatSync(lexicalTarget);
   const resolvedTarget = resolveTrashTargetPath(targetPath);
   const resolvedTargetPath = resolvedTarget.path;
+  const parent = createSyncDirectoryGuard(path.dirname(lexicalTarget));
   // Admit the directory entry only when its parent really stays inside an
   // allowed root. Do not admit it because the symlink target is inside.
   const resolvedParent = resolveTrashEntryParent(lexicalTarget, targetPath);
@@ -129,10 +130,9 @@ function assertAllowedTrashTarget(
   if (!isAllowed) {
     throw new Error(`Refusing to trash path outside allowed roots: ${targetPath}`);
   }
-  const parent = createSyncDirectoryGuard(path.dirname(lexicalTarget));
-  if (parent.realPath !== resolvedParent) {
-    throw new Error(`Refusing to trash path after it changed: ${targetPath}`);
-  }
+  // Sync and native realpath can use different Windows short-name spellings.
+  // Recheck the retained guard around native containment instead of comparing them.
+  assertSyncDirectoryGuard(parent);
   return {
     parent,
     path: lexicalTarget,
