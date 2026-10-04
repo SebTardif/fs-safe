@@ -102,15 +102,19 @@ export function stripArchivePath(entryPath: string, stripComponents: number): st
 export function createArchiveOutputPathTracker(): (entryPath: string, originalPath: string) => void {
   const seen = new Set<string>();
   return (entryPath, originalPath) => {
-    const normalized = path.posix.normalize(normalizeArchiveEntryPath(entryPath));
+    // Extraction passes stripArchivePath output. Native manifests and physical
+    // admission pass raw names, and path.posix.normalize keeps a directory's
+    // trailing slash, so "A/" and "a" would not share a key.
+    const canonical = stripArchivePath(entryPath, 0)
+      ?? path.posix.normalize(normalizeArchiveEntryPath(entryPath));
     // Archive policy must not depend on the destination volume's case or
     // Unicode-normalization behavior. Otherwise the JavaScript and native
     // writers can disagree about which of two colliding entries wins.
-    const collisionKey = lowerCaseNfc(normalized);
+    const collisionKey = lowerCaseNfc(canonical);
     if (seen.has(collisionKey)) {
       throw new ArchiveSecurityError(
         "entry-path",
-        `archive entries collide at output path ${formatErrorDetail(normalized)}: ${formatErrorDetail(originalPath)}`,
+        `archive entries collide at output path ${formatErrorDetail(canonical)}: ${formatErrorDetail(originalPath)}`,
       );
     }
     seen.add(collisionKey);

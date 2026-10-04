@@ -62,7 +62,10 @@ describe("path normalization fast paths", () => {
     expect(() => isWindowsDrivePath(value as never)).toThrow(TypeError);
   });
 
-  it.each([["Folder/FILE", "folder/file"], ["café", "cafe\u0301"], ["İ", "i\u0307"], ["K", "k"], ["ΟΣ", "ος"]])(
+  it.each([
+    ["Folder/FILE", "folder/file"], ["café", "cafe\u0301"], ["İ", "i\u0307"], ["K", "k"], ["ΟΣ", "ος"],
+    ["A/", "a"], ["é/", "e\u0301"], ["Foo/Bar/", "foo/bar"],
+  ])(
     "keeps archive collision identities for %j and %j", (first, second) => {
       const track = createArchiveOutputPathTracker();
       track(first, first);

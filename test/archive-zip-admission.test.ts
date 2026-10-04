@@ -57,6 +57,7 @@ for (const mode of ["off", "require", "auto-native", "auto-missing"] as const) {
       [{ name: "same" }, { name: "same" }],
       [{ name: "same" }, { name: "./same" }],
       [{ name: "same/" }, { name: "same", attributes: 0x10 }],
+      [{ name: "A/", attributes: 0x10 }, { name: "a" }],
       [{ name: "a", extra: unicodePath(Buffer.from("a"), "same") }, { name: "same" }],
       [{ name: "same", extra: unicodePath(Buffer.from("same"), "a") }, { name: "same", extra: unicodePath(Buffer.from("same"), "b") }],
     ] satisfies ZipRecord[][])("rejects hidden collisions %j before returning an unrelated member", async (...entries) => {
