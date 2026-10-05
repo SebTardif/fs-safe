@@ -58,6 +58,8 @@ for (const mode of ["off", "require", "auto-native", "auto-missing"] as const) {
       [{ name: "same" }, { name: "./same" }],
       [{ name: "same/" }, { name: "same", attributes: 0x10 }],
       [{ name: "A/", attributes: 0x10 }, { name: "a" }],
+      [{ name: "./A//", attributes: 0x10 }, { name: "a" }],
+      [{ name: "é/", attributes: 0x10, flags: 0x800 }, { name: "e\u0301", flags: 0x800 }],
       [{ name: "a", extra: unicodePath(Buffer.from("a"), "same") }, { name: "same" }],
       [{ name: "same", extra: unicodePath(Buffer.from("same"), "a") }, { name: "same", extra: unicodePath(Buffer.from("same"), "b") }],
     ] satisfies ZipRecord[][])("rejects hidden collisions %j before returning an unrelated member", async (...entries) => {
@@ -72,6 +74,18 @@ for (const mode of ["off", "require", "auto-native", "auto-missing"] as const) {
     it("rejects material central/local and UTF8/Unicode conflicts", async () => {
       await rejected(zipRecords([{ name: "central", localName: "local" }]), "local", 0, "archive-header-invalid");
       await rejected(zipRecords([{ name: "safe", flags: 0x800, extra: unicodePath(Buffer.from("safe"), "other") }]), "safe", 0, "archive-header-invalid");
+    });
+    it.each([".", "./", "././"])("keeps root marker %s separate from real output paths", async (name) => {
+      const input = await fixture(zipRecords([
+        { name, attributes: 0x10, body: "" },
+        { name: "./Folder//value", body: "nested" },
+        { name: "folder-value", body: "distinct" },
+      ]));
+      expect((await readArchiveEntry(input.archivePath, "Folder/value", { maxBytes: 32 })).toString()).toBe("nested");
+      expect((await readArchiveEntry(input.archivePath, "folder-value", { maxBytes: 32 })).toString()).toBe("distinct");
+    });
+    it("rejects empty physical names before output admission", async () => {
+      await rejected(zipRecords([{ name: "" }, { name: "good" }]), "good", 0, "archive-header-invalid");
     });
     it("keeps fully stripped entries out of the callback while counting physical records", async () => {
       const input = await fixture(zipRecords([{ name: "good" }, { name: "other" }])); const entryFilter = vi.fn(() => "extract" as const);
