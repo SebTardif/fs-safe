@@ -131,7 +131,9 @@ and, when present, the entry itself. Parent activity requests a guarded scan
 without supplying filenames. The entry descriptor covers content and attribute
 changes and is replaced when a guarded scan admits a new identity. Missing paths
 use their nearest admitted ancestor. Descriptors are opened without following
-symlinks; a symlink entry uses `O_SYMLINK` to observe the link itself. Every
+symlinks; a symlink entry uses `O_SYMLINK` to observe the link itself. All
+non-directory entries are opened nonblocking so a FIFO cannot stall the shared
+watch hub. Every
 descriptor's device/inode must match the guarded observation. There are at most
 two retained descriptors per entry scope (128 scopes maximum), counted in health
 `directories`; descriptor exhaustion fails registration with `EMFILE`. Removal

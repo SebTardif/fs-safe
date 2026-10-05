@@ -87,7 +87,8 @@ fn open(spec: &Spec) -> NativeResult<OwnedFd> {
     let flags = libc::O_EVTONLY
         | libc::O_CLOEXEC
         | match spec.kind.as_str() {
-            "symlink" => libc::O_SYMLINK,
+            // O_SYMLINK also opens other kinds after a swap, including FIFOs.
+            "symlink" => libc::O_SYMLINK | libc::O_NONBLOCK,
             "directory" => libc::O_NOFOLLOW | libc::O_DIRECTORY,
             // A FIFO opened without O_NONBLOCK blocks the hub thread in openat.
             _ => libc::O_NOFOLLOW | libc::O_NONBLOCK,
@@ -339,25 +340,48 @@ mod tests {
     }
     #[test]
     fn fifo_entry_registration_returns() {
+        const CHILD_ROOT: &str = "FS_SAFE_TEST_KQUEUE_FIFO_ROOT";
+        if let Some(root) = std::env::var_os(CHILD_ROOT) {
+            let root = std::path::PathBuf::from(root);
+            let pending = Arc::new(Mutex::new(Pending { limit: 32, ..Pending::default() }));
+            let mut queue = Queue::new().unwrap();
+            let opened = queue.configure(1, root.to_str().unwrap(), vec![entry(&root)], pending);
+            assert_eq!(opened.unwrap().directories, 2);
+            queue.remove(1);
+            fs::remove_file(root.join("entry")).unwrap();
+            symlink("outside-not-followed", root.join("entry")).unwrap();
+            let registration = entry(&root);
+            fs::remove_file(root.join("entry")).unwrap();
+            let name = std::ffi::CString::new(root.join("entry").to_str().unwrap()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+            let pending = Arc::new(Mutex::new(Pending::default()));
+            let replaced = queue.configure(1, root.to_str().unwrap(), vec![registration], pending);
+            assert_eq!(replaced.err().expect("replaced symlink must reject").status, "ESTALE");
+            return;
+        }
         let root = std::env::temp_dir().join(format!("fs-safe-kqueue-fifo-{}", std::process::id()));
         fs::create_dir(&root).unwrap();
-        let fifo = root.join("entry");
-        let name = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        let name = std::ffi::CString::new(root.join("entry").to_str().unwrap()).unwrap();
         assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
-        let pending = Arc::new(Mutex::new(Pending { limit: 32, ..Pending::default() }));
-        let mut queue = Queue::new().unwrap();
-        let root_text = root.to_str().unwrap().to_string();
-        let (sender, receiver) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let registration = entry(std::path::Path::new(&root_text));
-            let opened = queue.configure(1, &root_text, vec![registration], pending);
-            let _ = sender.send(opened.is_ok());
-        });
-        match receiver.recv_timeout(std::time::Duration::from_secs(2)) {
-            Ok(true) => {}
-            Ok(false) => panic!("fifo entry registration failed"),
-            Err(error) => panic!("fifo entry registration blocked: {error}"),
-        }
+        // A blocking-open regression must not leave a stuck thread in the test runner.
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "watch::platform::kqueue::tests::fifo_entry_registration_returns"])
+            .env(CHILD_ROOT, &root)
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let outcome = loop {
+            if let Some(outcome) = child.try_wait().unwrap() {
+                break Some(outcome);
+            }
+            if std::time::Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                break None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
         fs::remove_dir_all(&root).unwrap();
+        assert!(outcome.expect("FIFO entry registration blocked").success());
     }
 }
